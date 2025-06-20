@@ -1,11 +1,13 @@
 from __future__ import annotations
-"""PokerTool5 – Enhanced with table visualization and advanced metrics
+"""PokerTool5 – Enhanced with visual card selection and drag-drop interface
 --------------------------------------------------------------------------------------
 Features:
+- Visual card grid for selection
+- Drag and drop card placement
+- Large, scalable card icons
+- Visual slots for hole cards and community cards
 - Graphical table representation
-- Advanced metrics (pot odds, SPR, equity calculations)
-- Improved strategy recommendations
-- Opponent profiling
+- Advanced metrics and strategy recommendations
 """
 
 import logging
@@ -14,7 +16,7 @@ import math
 from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
-from typing import Generator, List, Optional, Tuple, Dict, Callable, Any
+from typing import Generator, List, Optional, Tuple, Dict, Callable, Any, Set
 from itertools import combinations
 from dataclasses import dataclass
 from enum import Enum
@@ -86,6 +88,7 @@ class PokerDatabase:
 # Card helpers
 # ---------------------------------------------------------------------------
 SUITS = ["♠", "♥", "♦", "♣"]
+SUIT_COLORS = {"♠": "black", "♣": "black", "♥": "red", "♦": "red"}
 RANKS = ["2", "3", "4", "5", "6", "7", "8", "9", "T", "J", "Q", "K", "A"]
 RANK_VALUES = {r: i for i, r in enumerate(RANKS)}
 
@@ -116,28 +119,6 @@ POSITION_BULLY_FACTORS = {
     4: 1.0,   # BTN - Best bullying position
     5: 0.7,   # SB - Moderate (out of position post-flop)
     6: 0.5    # BB - Limited (worst position post-flop)
-}
-
-# Stack size categories
-STACK_CATEGORIES = {
-    'short': (0, 20),      # 0-20 BB
-    'medium': (20, 80),    # 20-80 BB
-    'deep': (80, 150),     # 80-150 BB
-    'very_deep': (150, 999) # 150+ BB
-}
-
-# Bullying effectiveness based on stack dynamics
-STACK_BULLY_MATRIX = {
-    ('very_deep', 'short'): 0.6,
-    ('very_deep', 'medium'): 1.0,
-    ('very_deep', 'deep'): 0.7,
-    ('very_deep', 'very_deep'): 0.5,
-    ('deep', 'short'): 0.6,
-    ('deep', 'medium'): 0.9,
-    ('deep', 'deep'): 0.6,
-    ('medium', 'short'): 0.5,
-    ('medium', 'medium'): 0.4,
-    ('short', 'short'): 0.2,
 }
 
 HAND_TIERS = {
@@ -359,90 +340,277 @@ def calculate_advanced_metrics(
     
     return metrics
 
-class OpponentProfile:
-    """Track opponent tendencies and statistics"""
+class DraggableCard(tk.Label):
+    """A card widget that can be dragged"""
     
-    def __init__(self, name: str):
-        self.name = name
-        self.hands_played = 0
-        self.vpip = 0.0  # Voluntarily Put In Pot
-        self.pfr = 0.0   # Pre-Flop Raise
-        self.aggression_factor = 0.0
-        self.fold_to_cbet = 0.0
-        self.opponent_type = OpponentType.UNKNOWN
+    def __init__(self, parent, card: Card, card_size: int = 60):
+        super().__init__(parent)
+        self.card = card
+        self.card_size = card_size
+        self.original_parent = parent
+        self.is_selected = False
         
-    def update_stats(self, action: str, position: int):
-        """Update opponent statistics based on observed action"""
-        self.hands_played += 1
-        # Simplified stat tracking
-        if action in ['call', 'raise', 'bet']:
-            self.vpip = min(100.0, self.vpip + 1.0)
+        # Configure the card appearance
+        self.configure(
+            text=f"{card.rank}\n{card.suit}",
+            font=('Arial', card_size // 3, 'bold'),
+            fg=SUIT_COLORS[card.suit],
+            bg='white',
+            relief='raised',
+            bd=2,
+            width=card_size // 10,
+            height=card_size // 20,
+            cursor='hand2'
+        )
         
-        if action in ['raise', 'bet']:
-            self.pfr = min(100.0, self.pfr + 0.5)
-            self.aggression_factor = min(5.0, self.aggression_factor + 0.1)
-    
-    def classify_opponent(self) -> OpponentType:
-        """Classify opponent based on tracked statistics"""
-        if self.hands_played < 10:
-            return OpponentType.UNKNOWN
+        # Bind drag events
+        self.bind('<Button-1>', self.on_click)
+        self.bind('<B1-Motion>', self.on_drag)
+        self.bind('<ButtonRelease-1>', self.on_release)
         
-        if self.vpip < 20 and self.pfr < 15:
-            return OpponentType.TIGHT_PASSIVE
-        elif self.vpip < 25 and self.pfr > 15:
-            return OpponentType.TIGHT_AGGRESSIVE
-        elif self.vpip > 35 and self.pfr < 15:
-            return OpponentType.LOOSE_PASSIVE
-        elif self.vpip > 30 and self.pfr > 20:
-            return OpponentType.LOOSE_AGGRESSIVE
+        self.start_x = 0
+        self.start_y = 0
+        
+    def on_click(self, event):
+        """Handle click event"""
+        self.start_x = event.x
+        self.start_y = event.y
+        self.lift()  # Bring to front
+        
+    def on_drag(self, event):
+        """Handle drag event"""
+        x = self.winfo_x() + event.x - self.start_x
+        y = self.winfo_y() + event.y - self.start_y
+        self.place(x=x, y=y)
+        
+    def on_release(self, event):
+        """Handle release event"""
+        # Find which drop zone we're over
+        x = self.winfo_rootx()
+        y = self.winfo_rooty()
+        
+        # Get the widget under the cursor
+        target = self.winfo_containing(x, y)
+        
+        # Check if it's a valid drop zone
+        if hasattr(target, 'accept_drop'):
+            target.accept_drop(self)
         else:
-            return OpponentType.UNKNOWN
+            # Return to original position if not dropped on valid zone
+            self.reset_position()
+    
+    def reset_position(self):
+        """Reset card to original position"""
+        self.place_forget()
+        self.pack(side='left', padx=2, pady=2)
+
+class CardSlot(tk.Frame):
+    """A slot that can accept dropped cards"""
+    
+    def __init__(self, parent, slot_name: str, card_size: int = 60, on_update=None):
+        super().__init__(parent, bg='darkgreen', relief='sunken', bd=3)
+        self.slot_name = slot_name
+        self.card_size = card_size
+        self.on_update = on_update
+        self.current_card = None
+        
+        # Size configuration
+        self.configure(width=card_size + 10, height=int(card_size * 1.4) + 10)
+        self.pack_propagate(False)
+        
+        # Empty slot label
+        self.empty_label = tk.Label(
+            self,
+            text=slot_name,
+            bg='darkgreen',
+            fg='white',
+            font=('Arial', 10)
+        )
+        self.empty_label.pack(expand=True)
+        
+    def accept_drop(self, card_widget: DraggableCard):
+        """Accept a dropped card"""
+        # Remove any existing card
+        if self.current_card:
+            self.current_card.reset_position()
+        
+        # Clear the empty label
+        self.empty_label.pack_forget()
+        
+        # Place the new card
+        card_widget.place_forget()
+        card_widget.original_parent = self
+        self.current_card = card_widget
+        
+        # Create a display copy in the slot
+        display_card = tk.Label(
+            self,
+            text=f"{card_widget.card.rank}\n{card_widget.card.suit}",
+            font=('Arial', self.card_size // 3, 'bold'),
+            fg=SUIT_COLORS[card_widget.card.suit],
+            bg='white',
+            relief='raised',
+            bd=2
+        )
+        display_card.pack(expand=True, fill='both', padx=5, pady=5)
+        
+        # Store reference to display
+        self.display_widget = display_card
+        
+        # Trigger update callback
+        if self.on_update:
+            self.on_update()
+    
+    def clear(self):
+        """Clear the slot"""
+        if hasattr(self, 'display_widget'):
+            self.display_widget.destroy()
+        self.current_card = None
+        self.empty_label.pack(expand=True)
+    
+    def get_card(self) -> Optional[Card]:
+        """Get the card in this slot"""
+        return self.current_card.card if self.current_card else None
 
 class TableVisualization(tk.Frame):
-    """GUI component for table visualization"""
+    """GUI component for table visualization with card slots"""
     
-    def __init__(self, parent):
+    def __init__(self, parent, on_update=None):
         super().__init__(parent)
-        self.canvas = tk.Canvas(self, width=400, height=300, bg='darkgreen')
+        self.on_update = on_update
+        self.card_size = 60
+        
+        # Main canvas for table
+        self.canvas = tk.Canvas(self, width=600, height=400, bg='darkgreen')
         self.canvas.pack(padx=10, pady=10)
-        self.draw_table()
         
-    def draw_table(self):
-        """Draw the poker table"""
-        # Clear canvas
-        self.canvas.delete("all")
+        # Card slots
+        self.hole_card_slots = []
+        self.community_card_slots = []
         
+        self.setup_table()
+        
+    def setup_table(self):
+        """Setup the poker table with card slots"""
         # Draw table
-        self.canvas.create_oval(50, 50, 350, 250, fill='darkgreen', outline='brown', width=5)
+        self.canvas.create_oval(100, 100, 500, 300, fill='darkgreen', outline='brown', width=5)
         
         # Draw positions
         positions = [
-            (200, 60, "BTN"),   # Button
-            (120, 80, "SB"),    # Small Blind
-            (80, 150, "BB"),    # Big Blind
-            (120, 220, "UTG"),  # Under the Gun
-            (200, 240, "MP"),   # Middle Position
-            (280, 220, "CO"),   # Cut Off
+            (300, 110, "BTN"),   # Button
+            (220, 130, "SB"),    # Small Blind
+            (180, 200, "BB"),    # Big Blind
+            (220, 270, "UTG"),   # Under the Gun
+            (300, 290, "MP"),    # Middle Position
+            (380, 270, "CO"),    # Cut Off
         ]
         
         for x, y, pos in positions:
             self.canvas.create_oval(x-20, y-20, x+20, y+20, fill='lightblue', outline='black')
             self.canvas.create_text(x, y-30, text=pos, font=('Arial', 8, 'bold'))
+        
+        # Create hole card slots
+        hole_frame = tk.Frame(self.canvas, bg='darkgreen')
+        self.canvas.create_window(300, 350, window=hole_frame)
+        
+        self.canvas.create_text(300, 320, text="Your Hole Cards", fill='white', font=('Arial', 12, 'bold'))
+        
+        for i in range(2):
+            slot = CardSlot(hole_frame, f"Hole {i+1}", self.card_size, self.on_update)
+            slot.pack(side='left', padx=5)
+            self.hole_card_slots.append(slot)
+        
+        # Create community card slots
+        community_frame = tk.Frame(self.canvas, bg='darkgreen')
+        self.canvas.create_window(300, 200, window=community_frame)
+        
+        self.canvas.create_text(300, 160, text="Community Cards", fill='white', font=('Arial', 12, 'bold'))
+        
+        for i in range(5):
+            slot = CardSlot(community_frame, ["Flop 1", "Flop 2", "Flop 3", "Turn", "River"][i], 
+                          self.card_size, self.on_update)
+            slot.pack(side='left', padx=3)
+            self.community_card_slots.append(slot)
+    
+    def get_hole_cards(self) -> List[Card]:
+        """Get current hole cards"""
+        cards = []
+        for slot in self.hole_card_slots:
+            card = slot.get_card()
+            if card:
+                cards.append(card)
+        return cards
+    
+    def get_community_cards(self) -> List[Card]:
+        """Get current community cards"""
+        cards = []
+        for slot in self.community_card_slots:
+            card = slot.get_card()
+            if card:
+                cards.append(card)
+        return cards
+    
+    def clear_all(self):
+        """Clear all card slots"""
+        for slot in self.hole_card_slots + self.community_card_slots:
+            slot.clear()
+
+class CardSelectionGrid(tk.Frame):
+    """Grid showing all 52 cards for selection"""
+    
+    def __init__(self, parent, card_size: int = 60):
+        super().__init__(parent)
+        self.card_size = card_size
+        self.card_widgets = {}
+        self.used_cards = set()
+        
+        self.setup_grid()
+        
+    def setup_grid(self):
+        """Create the card selection grid"""
+        # Create a frame for each suit
+        for suit_idx, suit in enumerate(SUITS):
+            suit_frame = tk.LabelFrame(
+                self,
+                text=f"{suit} {['Spades', 'Hearts', 'Diamonds', 'Clubs'][suit_idx]}",
+                font=('Arial', 12, 'bold'),
+                fg=SUIT_COLORS[suit]
+            )
+            suit_frame.grid(row=suit_idx, column=0, sticky='ew', padx=5, pady=5)
+            
+            # Create cards for this suit
+            for rank_idx, rank in enumerate(RANKS):
+                card = Card(rank, suit)
+                card_widget = DraggableCard(suit_frame, card, self.card_size)
+                card_widget.pack(side='left', padx=2, pady=2)
+                
+                # Store reference
+                self.card_widgets[str(card)] = card_widget
+    
+    def mark_used(self, card: Card):
+        """Mark a card as used"""
+        self.used_cards.add(str(card))
+        if str(card) in self.card_widgets:
+            self.card_widgets[str(card)].configure(bg='lightgray')
+    
+    def mark_unused(self, card: Card):
+        """Mark a card as unused"""
+        self.used_cards.discard(str(card))
+        if str(card) in self.card_widgets:
+            self.card_widgets[str(card)].configure(bg='white')
 
 class PokerAssistant:
-    """Main application class"""
+    """Main application class with visual card interface"""
     
     def __init__(self, root):
         self.root = root
-        self.root.title("PokerTool5 - Advanced Poker Assistant")
-        self.root.geometry("800x600")
+        self.root.title("PokerTool5 - Visual Poker Assistant")
+        self.root.geometry("1200x800")
         
         # Initialize database
         self.db = PokerDatabase()
         
         # Current game state
-        self.hole_cards = []
-        self.community_cards = []
         self.position = 1
         self.pot_size = 0.0
         self.call_amount = 0.0
@@ -455,107 +623,109 @@ class PokerAssistant:
         self.setup_gui()
         
     def setup_gui(self):
-        """Setup the main GUI"""
-        # Create notebook for tabs
-        notebook = ttk.Notebook(self.root)
-        notebook.pack(fill='both', expand=True, padx=10, pady=10)
+        """Setup the main GUI with visual elements"""
+        # Create main container
+        main_container = tk.Frame(self.root)
+        main_container.pack(fill='both', expand=True, padx=10, pady=10)
         
-        # Main game tab
-        main_frame = ttk.Frame(notebook)
-        notebook.add(main_frame, text="Game Analysis")
+        # Left side - Card selection
+        left_frame = tk.Frame(main_container)
+        left_frame.pack(side='left', fill='both', expand=True)
+        
+        # Card selection label
+        tk.Label(left_frame, text="Card Selection", font=('Arial', 16, 'bold')).pack(pady=5)
+        
+        # Card grid
+        self.card_grid = CardSelectionGrid(left_frame, card_size=50)
+        self.card_grid.pack(padx=10, pady=10)
+        
+        # Right side - Table and analysis
+        right_frame = tk.Frame(main_container)
+        right_frame.pack(side='right', fill='both', expand=True)
         
         # Table visualization
-        table_frame = ttk.LabelFrame(main_frame, text="Table View")
+        table_frame = ttk.LabelFrame(right_frame, text="Poker Table")
         table_frame.pack(fill='x', padx=5, pady=5)
         
-        self.table_viz = TableVisualization(table_frame)
+        self.table_viz = TableVisualization(table_frame, on_update=self.on_cards_update)
         self.table_viz.pack()
         
-        # Hand input
-        hand_frame = ttk.LabelFrame(main_frame, text="Current Hand")
-        hand_frame.pack(fill='x', padx=5, pady=5)
-        
-        ttk.Label(hand_frame, text="Hole Cards:").grid(row=0, column=0, padx=5, pady=5)
-        self.hole_cards_var = tk.StringVar(value="AhKs")
-        ttk.Entry(hand_frame, textvariable=self.hole_cards_var, width=10).grid(row=0, column=1, padx=5, pady=5)
-        
-        ttk.Label(hand_frame, text="Community Cards:").grid(row=0, column=2, padx=5, pady=5)
-        self.community_cards_var = tk.StringVar()
-        ttk.Entry(hand_frame, textvariable=self.community_cards_var, width=15).grid(row=0, column=3, padx=5, pady=5)
+        # Controls frame
+        controls_frame = ttk.LabelFrame(right_frame, text="Game Controls")
+        controls_frame.pack(fill='x', padx=5, pady=5)
         
         # Position and betting
-        betting_frame = ttk.LabelFrame(main_frame, text="Betting Information")
-        betting_frame.pack(fill='x', padx=5, pady=5)
+        row1_frame = tk.Frame(controls_frame)
+        row1_frame.pack(fill='x', padx=5, pady=5)
         
-        ttk.Label(betting_frame, text="Position:").grid(row=0, column=0, padx=5, pady=5)
+        ttk.Label(row1_frame, text="Position:").pack(side='left', padx=5)
         self.position_var = tk.IntVar(value=1)
-        position_combo = ttk.Combobox(betting_frame, textvariable=self.position_var, width=10)
+        position_combo = ttk.Combobox(row1_frame, textvariable=self.position_var, width=15)
         position_combo['values'] = [f"{i} ({POSITION_NAMES[i]})" for i in range(1, 7)]
-        position_combo.grid(row=0, column=1, padx=5, pady=5)
+        position_combo.pack(side='left', padx=5)
         
-        ttk.Label(betting_frame, text="Pot Size:").grid(row=0, column=2, padx=5, pady=5)
+        ttk.Label(row1_frame, text="Pot Size:").pack(side='left', padx=5)
         self.pot_size_var = tk.DoubleVar(value=10.0)
-        ttk.Entry(betting_frame, textvariable=self.pot_size_var, width=10).grid(row=0, column=3, padx=5, pady=5)
+        ttk.Entry(row1_frame, textvariable=self.pot_size_var, width=10).pack(side='left', padx=5)
         
-        ttk.Label(betting_frame, text="Call Amount:").grid(row=1, column=0, padx=5, pady=5)
+        row2_frame = tk.Frame(controls_frame)
+        row2_frame.pack(fill='x', padx=5, pady=5)
+        
+        ttk.Label(row2_frame, text="Call Amount:").pack(side='left', padx=5)
         self.call_amount_var = tk.DoubleVar(value=2.0)
-        ttk.Entry(betting_frame, textvariable=self.call_amount_var, width=10).grid(row=1, column=1, padx=5, pady=5)
+        ttk.Entry(row2_frame, textvariable=self.call_amount_var, width=10).pack(side='left', padx=5)
         
-        ttk.Label(betting_frame, text="Stack Size:").grid(row=1, column=2, padx=5, pady=5)
+        ttk.Label(row2_frame, text="Stack Size:").pack(side='left', padx=5)
         self.stack_size_var = tk.DoubleVar(value=100.0)
-        ttk.Entry(betting_frame, textvariable=self.stack_size_var, width=10).grid(row=1, column=3, padx=5, pady=5)
+        ttk.Entry(row2_frame, textvariable=self.stack_size_var, width=10).pack(side='left', padx=5)
         
-        # Analysis button
-        ttk.Button(betting_frame, text="Analyze Hand", command=self.analyze_hand).grid(row=2, column=0, columnspan=4, pady=10)
+        # Action buttons
+        button_frame = tk.Frame(controls_frame)
+        button_frame.pack(fill='x', padx=5, pady=10)
+        
+        ttk.Button(button_frame, text="Analyze Hand", command=self.analyze_hand).pack(side='left', padx=5)
+        ttk.Button(button_frame, text="Clear Table", command=self.clear_table).pack(side='left', padx=5)
         
         # Results display
-        results_frame = ttk.LabelFrame(main_frame, text="Analysis Results")
+        results_frame = ttk.LabelFrame(right_frame, text="Analysis Results")
         results_frame.pack(fill='both', expand=True, padx=5, pady=5)
         
-        self.results_text = tk.Text(results_frame, height=15, wrap=tk.WORD)
+        self.results_text = tk.Text(results_frame, height=10, wrap=tk.WORD)
         scrollbar = ttk.Scrollbar(results_frame, orient="vertical", command=self.results_text.yview)
         self.results_text.configure(yscrollcommand=scrollbar.set)
         
         self.results_text.pack(side="left", fill="both", expand=True)
         scrollbar.pack(side="right", fill="y")
-        
-        # Statistics tab
-        stats_frame = ttk.Frame(notebook)
-        notebook.add(stats_frame, text="Statistics")
-        
-        ttk.Label(stats_frame, text="Game Statistics", font=('Arial', 16, 'bold')).pack(pady=10)
-        ttk.Label(stats_frame, text="Feature coming soon...").pack()
     
-    def parse_cards(self, card_string: str) -> List[Card]:
-        """Parse card string into Card objects"""
-        cards = []
-        card_string = card_string.replace(" ", "").replace(",", "")
+    def on_cards_update(self):
+        """Called when cards are dropped on the table"""
+        # Update card usage in the selection grid
+        all_cards = self.table_viz.get_hole_cards() + self.table_viz.get_community_cards()
         
-        i = 0
-        while i < len(card_string) - 1:
-            rank = card_string[i]
-            suit_char = card_string[i + 1]
-            
-            # Convert suit character to symbol
-            suit_map = {'h': '♥', 'd': '♦', 'c': '♣', 's': '♠'}
-            suit = suit_map.get(suit_char.lower(), suit_char)
-            
-            if rank in RANKS and suit in SUITS:
-                cards.append(Card(rank, suit))
-            
-            i += 2
+        # Mark all cards as unused first
+        for card_str in self.card_grid.card_widgets:
+            card_widget = self.card_grid.card_widgets[card_str]
+            card_widget.configure(bg='white')
         
-        return cards
+        # Mark used cards
+        for card in all_cards:
+            self.card_grid.mark_used(card)
+    
+    def clear_table(self):
+        """Clear all cards from the table"""
+        self.table_viz.clear_all()
+        self.results_text.delete(1.0, tk.END)
+        self.on_cards_update()
     
     def analyze_hand(self):
         """Perform comprehensive hand analysis"""
         try:
-            # Parse input
-            hole_cards = self.parse_cards(self.hole_cards_var.get())
-            community_cards = self.parse_cards(self.community_cards_var.get())
+            # Get cards from visual interface
+            hole_cards = self.table_viz.get_hole_cards()
+            community_cards = self.table_viz.get_community_cards()
             
             if len(hole_cards) != 2:
-                messagebox.showerror("Error", "Please enter exactly 2 hole cards")
+                messagebox.showerror("Error", "Please place exactly 2 hole cards")
                 return
             
             # Get betting information
@@ -583,7 +753,7 @@ class PokerAssistant:
                 'community_cards': "".join(str(c) for c in community_cards),
                 'pot_size': pot_size,
                 'stack_size': stack_size,
-                'notes': 'Auto-analysis'
+                'notes': 'Visual analysis'
             }
             self.db.save_session(session_data)
             
@@ -686,11 +856,11 @@ def main():
     try:
         root = tk.Tk()
         app = PokerAssistant(root)
-        log.info("Enhanced Poker Assistant with Table Visualization started successfully")
+        log.info("Visual Poker Assistant started successfully")
         root.mainloop()
     except Exception as e:
         log.error(f"Failed to start application: {e}")
-        messagebox.showerror("Startup Error", f"Failed to start Enhanced Poker Assistant: {e}")
+        messagebox.showerror("Startup Error", f"Failed to start Visual Poker Assistant: {e}")
 
 if __name__ == "__main__":
     main()
