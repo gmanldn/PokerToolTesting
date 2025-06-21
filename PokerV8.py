@@ -1,3 +1,4 @@
+# PokerV8.py – Visual Poker Assistant, polished version
 from __future__ import annotations
 
 import logging
@@ -655,7 +656,7 @@ class PokerAssistant(tk.Tk):
         board = [s.card for s in self.board if s.card]
         
         pos = Position[self.position.get()]
-        stack_bb = StackType[self.stack_type.get()].default_bb
+        stack_bb = StackType(self.stack_type.get()).default_bb  # Fixed line
         pot = self.pot_size.get()
         call = self.call_amt.get()
 
