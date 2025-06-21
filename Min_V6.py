@@ -1,3 +1,23 @@
+I'll help you debug this poker assistant application. Looking at the code, I can see several potential issues. Let me analyze and provide fixes:
+
+Main Issues Found:
+
+Duplicate setup_gui() call - The setup_gui() method is called twice in __init__, which could cause widget duplication issues.
+
+
+Infinite recursion potential in schedule_refresh() - The method calls itself recursively without proper termination conditions.
+
+
+Missing error handling in various callback methods.
+
+
+Potential race conditions with the auto-refresh mechanism.
+
+
+Here's the debugged version with fixes:
+
+python
+
 from __future__ import annotations
 """PokerTool5 – Enhanced with visual card selection and drag-drop interface
 --------------------------------------------------------------------------------------
@@ -271,7 +291,7 @@ def evaluate_five_card_hand(cards: List[Card]) -> float:
         return 0.99  # Straight flush
     elif counts[0] == 4:
         return 0.95  # Four of a kind
-    elif counts[0] == 3 and counts[1] == 2:
+    elif counts[0] == 3 and len(counts) > 1 and counts[1] == 2:
         return 0.90  # Full house
     elif is_flush:
         return 0.85  # Flush
@@ -279,7 +299,7 @@ def evaluate_five_card_hand(cards: List[Card]) -> float:
         return 0.80  # Straight
     elif counts[0] == 3:
         return 0.70  # Three of a kind
-    elif counts[0] == 2 and counts[1] == 2:
+    elif counts[0] == 2 and len(counts) > 1 and counts[1] == 2:
         return 0.60  # Two pair
     elif counts[0] == 2:
         return 0.45  # One pair
@@ -662,6 +682,7 @@ class PokerAssistant:
         # Auto-refresh flag
         self.auto_refresh = True
         self.refresh_delay = 500  # milliseconds
+        self.refresh_job = None  # Store the after job ID
         
         self.setup_gui()
         
@@ -702,11 +723,14 @@ class PokerAssistant:
     
     def schedule_refresh(self):
         """Schedule the next automatic refresh"""
+        # Cancel any existing refresh job
+        if self.refresh_job:
+            self.root.after_cancel(self.refresh_job)
+        
         if self.auto_refresh:
             self.analyze_hand_silent()
-            self.root.after(self.refresh_delay, self.schedule_refresh)
-        
-        self.setup_gui()
+            # Schedule next refresh and store the job ID
+            self.refresh_job = self.root.after(self.refresh_delay, self.schedule_refresh)
         
     def setup_gui(self):
         """Setup the main GUI with visual elements"""
@@ -804,16 +828,19 @@ class PokerAssistant:
     
     def on_position_change(self, event=None):
         """Handle position change"""
-        # Extract position number from combo value "1 (BTN)" -> 1
-        combo_value = self.position_var.get()
-        if isinstance(combo_value, str):
-            position = int(combo_value.split()[0])
-        else:
-            position = combo_value
-        self.table_viz.highlight_position(position)
-        # Trigger analysis update
-        if self.auto_refresh_var.get():
-            self.analyze_hand_silent()
+        try:
+            # Extract position number from combo value "1 (BTN)" -> 1
+            combo_value = self.position_var.get()
+            if isinstance(combo_value, str):
+                position = int(combo_value.split()[0])
+            else:
+                position = combo_value
+            self.table_viz.highlight_position(position)
+            # Trigger analysis update
+            if self.auto_refresh_var.get():
+                self.analyze_hand_silent()
+        except Exception as e:
+            log.error(f"Error in position change: {e}")
     
     def on_cards_update(self):
         """Called when cards are dropped on the table"""
@@ -838,6 +865,11 @@ class PokerAssistant:
         self.auto_refresh = self.auto_refresh_var.get()
         if self.auto_refresh:
             self.schedule_refresh()
+        else:
+            # Cancel pending refresh
+            if self.refresh_job:
+                self.root.after_cancel(self.refresh_job)
+                self.refresh_job = None
     
     def analyze_hand_silent(self):
         """Perform hand analysis without error messages"""
