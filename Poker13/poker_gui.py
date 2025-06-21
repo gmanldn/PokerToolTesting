@@ -251,7 +251,6 @@ class CardSlot(tk.Frame):
         self._label.pack(expand=True)
         self._app.refresh()
 
-
 class TableVisualization(tk.Canvas):
     """Mini-table that shows seat positions and rotates."""
     def __init__(self, parent, app):
@@ -270,58 +269,76 @@ class TableVisualization(tk.Canvas):
         cx, cy = 150, 100
         rx, ry = 110, 70
 
+        # Draw the table ellipse
         self.create_oval(
-            cx-rx, cy-ry, cx+rx, cy+ry,
+            cx - rx, cy - ry, cx + rx, cy + ry,
             fill="#0d3a26", outline="#1a5f3f", width=3
         )
         self.create_oval(
-            cx-rx+10, cy-ry+10, cx+rx-10, cy+ry-10,
+            cx - rx + 10, cy - ry + 10, cx + rx - 10, cy + ry - 10,
             fill="", outline="#1a5f3f", width=1
         )
 
-        num_players      = self._app.num_players.get()
+        num_players = self._app.num_players.get()
         current_position = Position[self._app.position.get()]
-        your_seat        = current_position.value
+        your_seat = current_position.value
 
         for i in range(num_players):
             visual_pos = (i - self.table_rotation) % num_players
-            angle      = (visual_pos * 2*math.pi / num_players) - (math.pi/2)
-            px         = cx + int(rx*1.3*math.cos(angle))
-            py         = cy + int(ry*1.3*math.sin(angle))
+            angle = (visual_pos * 2 * math.pi / num_players) - (math.pi / 2)
+            px = cx + int(rx * 1.3 * math.cos(angle))
+            py = cy + int(ry * 1.3 * math.sin(angle))
 
             seat_num = i + 1
-            is_you   = seat_num == your_seat
-            radius   = 22 if is_you else 18
-            color    = "#fbbf24" if is_you else C_BTN_DARK
+            is_you = seat_num == your_seat
+            # --- CHANGE STARTS HERE ---
+            # Check if this seat is the dealer button (BTN)
+            is_dealer = seat_num == Position.BTN.value
 
+            radius = 22 if is_you else 18
+            
+            # Determine color based on position
+            if is_you:
+                color = "#fbbf24"       # Yellow for You
+                outline_color = "#fbbf24"
+                text_color = "black"
+                label = "YOU"
+                font_weight = "bold"
+            elif is_dealer:
+                color = C_BTN_INFO      # Blue for Dealer
+                outline_color = C_BTN_INFO_HOVER
+                text_color = "white"
+                label = "BTN"
+                font_weight = "bold"
+            else:
+                color = C_BTN_DARK      # Default for others
+                outline_color = C_BORDER
+                text_color = "white"
+                label = f"P{seat_num}"
+                font_weight = "normal"
+
+            # Draw the seat oval
             self.create_oval(
-                px-radius, py-radius, px+radius, py+radius,
+                px - radius, py - radius, px + radius, py + radius,
                 fill=color,
-                outline="#fbbf24" if is_you else C_BORDER,
-                width=2 if is_you else 1
+                outline=outline_color,
+                width=2 if is_you or is_dealer else 1
             )
-            label = "YOU" if is_you else f"P{seat_num}"
+            
+            # Draw the seat label
             self.create_text(
                 px, py, text=label,
-                font=("Arial", 10, "bold" if is_you else "normal"),
-                fill="black" if is_you else "white"
+                font=("Arial", 10, font_weight),
+                fill=text_color
             )
+            # --- CHANGE ENDS HERE ---
 
-            # dealer / blind annotations
-            if seat_num == 9:
-                self.create_oval(
-                    px+radius-5, py-radius-5, px+radius+5, py-radius+5,
-                    fill="white", outline=C_BORDER
-                )
-                self.create_text(
-                    px+radius, py-radius, text="D",
-                    font=("Arial", 8, "bold"), fill="black"
-                )
-            elif seat_num == 1:
-                self.create_text(px, py+radius+10, text="SB",
+            # Blind annotations (no longer need the separate dealer button drawing)
+            if seat_num == 1:
+                self.create_text(px, py + radius + 10, text="SB",
                                  font=("Arial", 9, "bold"), fill="#3b82f6")
             elif seat_num == 2:
-                self.create_text(px, py+radius+10, text="BB",
+                self.create_text(px, py + radius + 10, text="BB",
                                  font=("Arial", 9, "bold"), fill="#3b82f6")
 
     # Rotation helpers ------------------------------------------------------
