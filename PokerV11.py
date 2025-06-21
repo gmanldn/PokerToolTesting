@@ -306,12 +306,14 @@ C_BTN_DARK_HOVER = "#4b5563"
 class StyledButton(tk.Button):
     """High contrast button with consistent styling"""
     def __init__(self, parent, text="", color=C_BTN_PRIMARY, hover_color=None, **kwargs):
+        # Extract fg color if provided, otherwise default to white
+        fg_color = kwargs.pop("fg", "white")
         defaults = {
             "font": ("Arial", 10, "bold"), 
-            "fg": "white", 
+            "fg": fg_color, 
             "bg": color,
             "activebackground": hover_color or color, 
-            "activeforeground": "white",
+            "activeforeground": fg_color,
             "bd": 0, 
             "padx": 12, 
             "pady": 6, 
@@ -848,7 +850,8 @@ class PokerAssistant(tk.Tk):
             color=C_BTN_SUCCESS,
             hover_color=C_BTN_SUCCESS_HOVER, 
             command=self.start_game,
-            padx=20
+            padx=20,
+            fg="black"
         )
         self.go_btn.pack(side="left", padx=(0, 5))
         
@@ -857,7 +860,8 @@ class PokerAssistant(tk.Tk):
             text="CLEAR", 
             color=C_BTN_DARK,
             hover_color=C_BTN_DARK_HOVER, 
-            command=self.clear_all
+            command=self.clear_all,
+            fg="black"
         )
         clear_btn.pack(side="left")
         
@@ -869,7 +873,8 @@ class PokerAssistant(tk.Tk):
             hover_color=C_BTN_PRIMARY_HOVER, 
             command=self.record_player_actions,
             state="disabled",
-            font=("Arial", 11, "bold")
+            font=("Arial", 11, "bold"),
+            fg="black"
         )
         self.action_btn.pack(pady=(0, 10))
         
