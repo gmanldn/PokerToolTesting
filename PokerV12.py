@@ -4,10 +4,6 @@ Poker Assistant v12 - Complete Fixed Version with Table Visualization
 A comprehensive poker hand analysis tool with GUI and visual table layout
 """
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 1. Standard Library Imports
-# ─────────────────────────────────────────────────────────────────────────────
-
 import tkinter as tk
 from tkinter import ttk, messagebox
 import weakref
@@ -19,17 +15,11 @@ from dataclasses import dataclass
 import random
 import math
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 2. Logging Setup
-# ─────────────────────────────────────────────────────────────────────────────
-
+# Logging Setup
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 3. Core Poker Classes and Enums
-# ─────────────────────────────────────────────────────────────────────────────
-
+# Core Poker Classes and Enums
 class Suit(Enum):
     """Card suits with display properties"""
     SPADE = "♠"
@@ -107,10 +97,6 @@ class PlayerAction(Enum):
     CHECK = "Check"
     ALL_IN = "All-in"
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 4. Hand Analysis Data Structures
-# ─────────────────────────────────────────────────────────────────────────────
-
 @dataclass
 class HandAnalysis:
     """Results of hand analysis"""
@@ -123,10 +109,7 @@ class HandAnalysis:
     board_texture: str = "Unknown"
     spr: float = 0.0
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 5. Core Poker Functions
-# ─────────────────────────────────────────────────────────────────────────────
-
+# Core Poker Functions
 def hand_tier(hole_cards: List[Card]) -> str:
     """Categorize hand strength into tiers"""
     if len(hole_cards) != 2:
@@ -240,10 +223,7 @@ def get_hand_advice(tier: str, board_texture: str, spr: float) -> str:
     else:
         return "Weak hand. Look for good spots to bluff or fold if facing aggression."
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 6. Database Functions
-# ─────────────────────────────────────────────────────────────────────────────
-
+# Database Functions
 def open_db():
     """Open database connection and ensure tables exist"""
     conn = sqlite3.connect("poker_decisions.db")
@@ -274,30 +254,24 @@ def record_decision(analysis: HandAnalysis, position: Position, tier: str,
         """, (position.name, tier, stack_bb, pot, to_call, board, analysis.decision))
         return cursor.lastrowid
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 7. Custom Dialogs and Reusable Button Class
-# ─────────────────────────────────────────────────────────────────────────────
+# Color constants
+C_BG = "#1a1a1a"
+C_PANEL = "#242424"
+C_TABLE = "#1a5f3f"
+C_CARD = "#ffffff"
+C_CARD_INACTIVE = "#3a3a3a"
+C_TEXT = "#e8e8e8"
+C_TEXT_DIM = "#888888"
+C_BORDER = "#3a3a3a"
 
-# Enhanced color palette for better contrast and visual hierarchy
-C_BG = "#1a1a1a"         # Darker background
-C_PANEL = "#242424"       # Slightly lighter panels
-C_TABLE = "#1a5f3f"       # Darker poker table green
-C_CARD = "#ffffff"        # Pure white cards
-C_CARD_INACTIVE = "#3a3a3a"  # Greyed out cards
-C_TEXT = "#e8e8e8"        # Light text
-C_TEXT_DIM = "#888888"    # Dimmed text
-C_BORDER = "#3a3a3a"      # Subtle borders
+C_BTN_PRIMARY = "#10b981"
+C_BTN_SUCCESS = "#10b981"
+C_BTN_DANGER = "#ef4444"
+C_BTN_WARNING = "#f59e0b"
+C_BTN_INFO = "#3b82f6"
+C_BTN_DARK = "#374151"
 
-# Button colors with better contrast
-C_BTN_PRIMARY = "#0e7490"     # Teal - primary actions
-C_BTN_SUCCESS = "#10b981"     # Green - positive actions
-C_BTN_DANGER = "#ef4444"      # Red - negative actions
-C_BTN_WARNING = "#f59e0b"     # Amber - caution
-C_BTN_INFO = "#3b82f6"        # Blue - information
-C_BTN_DARK = "#374151"        # Gray - neutral
-
-# Hover states (20% lighter)
-C_BTN_PRIMARY_HOVER = "#0ea5c5"
+C_BTN_PRIMARY_HOVER = "#34d399"
 C_BTN_SUCCESS_HOVER = "#34d399"
 C_BTN_DANGER_HOVER = "#f87171"
 C_BTN_WARNING_HOVER = "#fbbf24"
@@ -307,8 +281,12 @@ C_BTN_DARK_HOVER = "#4b5563"
 class StyledButton(tk.Button):
     """High contrast button with consistent styling"""
     def __init__(self, parent, text="", color=C_BTN_PRIMARY, hover_color=None, **kwargs):
-        # Extract fg color if provided, otherwise default to white
-        fg_color = kwargs.pop("fg", "white")
+        if color in (C_BTN_PRIMARY, C_BTN_SUCCESS):
+            default_fg = "black"
+        else:
+            default_fg = "white"
+            
+        fg_color = kwargs.pop("fg", default_fg)
         defaults = {
             "font": ("Arial", 10, "bold"), 
             "fg": fg_color, 
@@ -328,10 +306,6 @@ class StyledButton(tk.Button):
         self.bind("<Enter>", lambda e: self.config(bg=self._hover_bg))
         self.bind("<Leave>", lambda e: self.config(bg=self._bg))
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 8. Player Action Dialog
-# ─────────────────────────────────────────────────────────────────────────────
-
 class PlayerActionDialog(tk.Toplevel):
     """Dialog for recording player actions"""
     def __init__(self, parent, player_num: int, current_pot: float):
@@ -341,11 +315,9 @@ class PlayerActionDialog(tk.Toplevel):
         self.configure(bg=C_PANEL)
         self.result = None
         
-        # Make dialog modal
         self.transient(parent)
         self.grab_set()
         
-        # Header
         tk.Label(
             self,
             text=f"What did Player {player_num} do?",
@@ -354,7 +326,6 @@ class PlayerActionDialog(tk.Toplevel):
             fg=C_TEXT
         ).pack(pady=20)
         
-        # Action buttons
         action_frame = tk.Frame(self, bg=C_PANEL)
         action_frame.pack(pady=10)
         
@@ -382,7 +353,6 @@ class PlayerActionDialog(tk.Toplevel):
             command=self._show_raise_input
         ).pack(pady=5, padx=20, fill="x")
         
-        # Raise amount input (hidden initially)
         self.raise_frame = tk.Frame(self, bg=C_PANEL)
         tk.Label(
             self.raise_frame,
@@ -409,7 +379,6 @@ class PlayerActionDialog(tk.Toplevel):
             command=self._confirm_raise
         ).pack(side="left", padx=5)
         
-        # Center dialog
         self.update_idletasks()
         x = (self.winfo_screenwidth() - self.winfo_width()) // 2
         y = (self.winfo_screenheight() - self.winfo_height()) // 2
@@ -431,13 +400,9 @@ class PlayerActionDialog(tk.Toplevel):
         except ValueError:
             messagebox.showerror("Invalid Input", "Please enter a valid number")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 9. GUI widgets
-# ─────────────────────────────────────────────────────────────────────────────
-
 class DraggableCard(tk.Label):
     """Card widget with improved visibility and interactions"""
-    def __init__(self, master: tk.Widget, card: Card, app: "PokerAssistant"):
+    def __init__(self, master: tk.Widget, card: Card, app):
         super().__init__(
             master, 
             text=str(card), 
@@ -480,12 +445,12 @@ class DraggableCard(tk.Label):
 
 class CardSlot(tk.Frame):
     """Card slot with improved visual feedback"""
-    def __init__(self, master: tk.Widget, name: str, app: "PokerAssistant"):
+    def __init__(self, master: tk.Widget, name: str, app):
         super().__init__(
             master, 
             width=60, 
             height=80,
-            bg="#0d3a26",  # Darker green for empty slots
+            bg="#0d3a26",
             bd=2, 
             relief="groove",
             highlightbackground=C_BORDER,
@@ -546,13 +511,9 @@ class CardSlot(tk.Frame):
         self._label.pack(expand=True)
         self._app.refresh()
 
-# ─────────────────────────────────────────────────────────────────────────────
-# 10. Table Visualization Widget
-# ─────────────────────────────────────────────────────────────────────────────
-
 class TableVisualization(tk.Canvas):
     """Visual representation of poker table with players"""
-    def __init__(self, parent, app: "PokerAssistant"):
+    def __init__(self, parent, app):
         super().__init__(
             parent,
             width=300,
@@ -561,18 +522,16 @@ class TableVisualization(tk.Canvas):
             highlightthickness=0
         )
         self._app = weakref.proxy(app)
-        self.table_rotation = 0  # Rotation offset in seats
+        self.table_rotation = 0
         self._draw_table()
         
     def _draw_table(self):
         """Draw the poker table and players"""
         self.delete("all")
         
-        # Table dimensions
-        cx, cy = 150, 100  # Center
-        rx, ry = 110, 70    # Radii
+        cx, cy = 150, 100
+        rx, ry = 110, 70
         
-        # Draw table (oval)
         self.create_oval(
             cx - rx, cy - ry, cx + rx, cy + ry,
             fill="#0d3a26",
@@ -580,7 +539,6 @@ class TableVisualization(tk.Canvas):
             width=3
         )
         
-        # Draw inner table line
         self.create_oval(
             cx - rx + 10, cy - ry + 10, cx + rx - 10, cy + ry - 10,
             fill="",
@@ -588,28 +546,20 @@ class TableVisualization(tk.Canvas):
             width=1
         )
         
-        # Get current game state
         num_players = self._app.num_players.get()
         current_position = Position[self._app.position.get()]
         your_seat = current_position.value
         
-        # Calculate player positions
         for i in range(num_players):
-            # Calculate visual position with rotation
             visual_pos = (i - self.table_rotation) % num_players
             angle = (visual_pos * 2 * math.pi / num_players) - (math.pi / 2)
             
-            # Player position on table
             px = cx + int(rx * 1.3 * math.cos(angle))
             py = cy + int(ry * 1.3 * math.sin(angle))
             
-            # Actual seat number (1-based)
             seat_num = i + 1
-            
-            # Determine if this is the user
             is_you = (seat_num == your_seat)
             
-            # Player circle
             radius = 22 if is_you else 18
             color = "#fbbf24" if is_you else C_BTN_DARK
             
@@ -620,7 +570,6 @@ class TableVisualization(tk.Canvas):
                 width=2 if is_you else 1
             )
             
-            # Player label
             label = "YOU" if is_you else f"P{seat_num}"
             self.create_text(
                 px, py,
@@ -629,7 +578,6 @@ class TableVisualization(tk.Canvas):
                 fill="black" if is_you else "white"
             )
             
-            # Position indicators
             if seat_num == 9:  # Button
                 self.create_oval(
                     px + radius - 5, py - radius - 5,
@@ -660,17 +608,13 @@ class TableVisualization(tk.Canvas):
                 
     def rotate_clockwise(self):
         """Rotate table view clockwise"""
-        self.table_rotation = (self.table_rotation + 1) % self._app.num_players.get()
+        self.table_rotation = (self.table_rotation - 1) % self._app.num_players.get()
         self._draw_table()
         
     def rotate_counter_clockwise(self):
         """Rotate table view counter-clockwise"""
-        self.table_rotation = (self.table_rotation - 1) % self._app.num_players.get()
+        self.table_rotation = (self.table_rotation + 1) % self._app.num_players.get()
         self._draw_table()
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 11. Main Application Window
-# ─────────────────────────────────────────────────────────────────────────────
 
 class PokerAssistant(tk.Tk):
     def __init__(self):
@@ -680,10 +624,8 @@ class PokerAssistant(tk.Tk):
         self.minsize(1200, 800)
         self.configure(bg=C_BG)
         
-        # Configure window style
         self.option_add("*Font", "Arial 10")
         
-        # Shared state
         self.position = tk.StringVar(value=Position.BTN.name)
         self.stack_type = tk.StringVar(value=StackType.MEDIUM.value)
         self.small_blind = tk.DoubleVar(value=0.5)
@@ -691,7 +633,6 @@ class PokerAssistant(tk.Tk):
         self.call_amt = tk.DoubleVar(value=2.0)
         self.num_players = tk.IntVar(value=6)
         
-        # Game state
         self.game_started = False
         self.current_pot = 0.0
         self.players_in_hand: List[int] = []
@@ -704,7 +645,6 @@ class PokerAssistant(tk.Tk):
         
         self._build_gui()
         
-        # Set up auto-refresh
         self._refresh_scheduled = False
         self.bind("<Configure>", lambda e: self._schedule_refresh())
         self.bind("<Button>", lambda e: self._schedule_refresh())
@@ -721,16 +661,14 @@ class PokerAssistant(tk.Tk):
         self.refresh()
 
     def _build_gui(self):
-        # Main container with padding
         main_container = tk.Frame(self, bg=C_BG)
         main_container.pack(fill="both", expand=True, padx=15, pady=10)
         
-        # LEFT PANEL - Card Selection
+        # LEFT PANEL
         left_panel = tk.Frame(main_container, bg=C_PANEL, width=340)
         left_panel.pack(side="left", fill="y")
         left_panel.pack_propagate(False)
         
-        # Card selection header
         header_frame = tk.Frame(left_panel, bg=C_PANEL)
         header_frame.pack(fill="x", padx=10, pady=(10, 5))
         tk.Label(
@@ -741,7 +679,6 @@ class PokerAssistant(tk.Tk):
             fg=C_TEXT
         ).pack(side="left")
         
-        # Card grid with better organization
         card_container = tk.Frame(left_panel, bg=C_PANEL)
         card_container.pack(fill="both", expand=True, padx=10)
         
@@ -762,7 +699,6 @@ class PokerAssistant(tk.Tk):
             )
             suit_frame.pack(fill="x", pady=3)
             
-            # Create two rows for cards
             rows_container = tk.Frame(suit_frame, bg=C_PANEL)
             rows_container.pack(padx=5, pady=5)
             
@@ -770,16 +706,15 @@ class PokerAssistant(tk.Tk):
             card_row1.pack()
             
             card_row2 = tk.Frame(rows_container, bg=C_PANEL)
-            card_row2.pack(pady=(3, 0))  # Small gap between rows
+            card_row2.pack(pady=(3, 0))
             
-            # Split ranks between two rows (7 in first row, 6 in second)
             for i, r in enumerate(RANKS):
                 card = Card(r, suit)
                 w = DraggableCard(card_row1 if i < 7 else card_row2, card, self)
                 w.pack(side="left", padx=2)
                 self.grid_cards[str(card)] = w
         
-        # TABLE VISUALIZATION - Bottom of left panel
+        # TABLE VISUALIZATION
         table_frame = tk.LabelFrame(
             left_panel,
             text=" TABLE VIEW ",
@@ -791,19 +726,17 @@ class PokerAssistant(tk.Tk):
         )
         table_frame.pack(fill="x", padx=10, pady=(10, 10))
         
-        # Table canvas
         self.table_viz = TableVisualization(table_frame, self)
         self.table_viz.pack(pady=(5, 5))
         
-        # Rotation controls
         rotation_frame = tk.Frame(table_frame, bg=C_PANEL)
         rotation_frame.pack(pady=(0, 10))
         
         StyledButton(
             rotation_frame,
             text="◀",
-            color=C_BTN_DARK,
-            hover_color=C_BTN_DARK_HOVER,
+            color=C_BTN_SUCCESS,
+            hover_color=C_BTN_SUCCESS_HOVER,
             command=self.table_viz.rotate_counter_clockwise,
             width=3,
             padx=5,
@@ -821,15 +754,15 @@ class PokerAssistant(tk.Tk):
         StyledButton(
             rotation_frame,
             text="▶",
-            color=C_BTN_DARK,
-            hover_color=C_BTN_DARK_HOVER,
+            color=C_BTN_SUCCESS,
+            hover_color=C_BTN_SUCCESS_HOVER,
             command=self.table_viz.rotate_clockwise,
             width=3,
             padx=5,
             pady=3
         ).pack(side="left", padx=5)
         
-        # RIGHT PANEL - Game Area
+        # RIGHT PANEL
         right_panel = tk.Frame(main_container, bg=C_BG)
         right_panel.pack(side="left", fill="both", expand=True, padx=(15, 0))
         
@@ -840,7 +773,6 @@ class PokerAssistant(tk.Tk):
         table_inner = tk.Frame(table_container, bg=C_TABLE)
         table_inner.pack(padx=20, pady=15)
         
-        # Your hand section
         your_hand_frame = tk.Frame(table_inner, bg=C_TABLE)
         your_hand_frame.pack(side="left", padx=(0, 30))
         
@@ -859,7 +791,6 @@ class PokerAssistant(tk.Tk):
         for s in self.hole: 
             s.pack(side="left", padx=3)
         
-        # Community cards section
         community_frame = tk.Frame(table_inner, bg=C_TABLE)
         community_frame.pack(side="left")
         
@@ -877,12 +808,11 @@ class PokerAssistant(tk.Tk):
         board_labels = ["Flop 1", "Flop 2", "Flop 3", "Turn", "River"]
         self.board = [CardSlot(board_container, label, self) for label in board_labels]
         
-        # Add separators
         for i, s in enumerate(self.board):
             s.pack(side="left", padx=3)
-            if i == 2:  # After flop
+            if i == 2:
                 tk.Frame(board_container, bg="#0a3d29", width=2).pack(side="left", fill="y", padx=5)
-            elif i == 3:  # After turn
+            elif i == 3:
                 tk.Frame(board_container, bg="#0a3d29", width=2).pack(side="left", fill="y", padx=5)
         
         # CONTROL PANEL
@@ -897,7 +827,6 @@ class PokerAssistant(tk.Tk):
         )
         control_panel.pack(fill="x", pady=(0, 10))
         
-        # Settings row
         settings_frame = tk.Frame(control_panel, bg=C_PANEL)
         settings_frame.pack(fill="x", padx=15, pady=10)
         
@@ -906,7 +835,6 @@ class PokerAssistant(tk.Tk):
         pos_frame.pack(side="left", padx=(0, 20))
         tk.Label(pos_frame, text="Position", bg=C_PANEL, fg=C_TEXT_DIM, font=("Arial", 9)).pack(anchor="w")
         
-        # Style for combobox
         style = ttk.Style(self)
         style.theme_use("clam")
         style.configure(
@@ -987,7 +915,6 @@ class PokerAssistant(tk.Tk):
         betting_frame = tk.Frame(settings_frame, bg=C_PANEL)
         betting_frame.pack(side="left", padx=(0, 20))
         
-        # Entry style
         entry_style = {
             "bg": C_BTN_DARK, 
             "fg": "white", 
@@ -1031,8 +958,7 @@ class PokerAssistant(tk.Tk):
             color=C_BTN_SUCCESS,
             hover_color=C_BTN_SUCCESS_HOVER, 
             command=self.start_game,
-            padx=20,
-            fg="black"
+            padx=20
         )
         self.go_btn.pack(side="left", padx=(0, 5))
         
@@ -1041,8 +967,7 @@ class PokerAssistant(tk.Tk):
             text="CLEAR", 
             color=C_BTN_DARK,
             hover_color=C_BTN_DARK_HOVER, 
-            command=self.clear_all,
-            fg="black"
+            command=self.clear_all
         )
         clear_btn.pack(side="left")
         
@@ -1054,8 +979,7 @@ class PokerAssistant(tk.Tk):
             hover_color=C_BTN_PRIMARY_HOVER, 
             command=self.record_player_actions,
             state="disabled",
-            font=("Arial", 11, "bold"),
-            fg="black"
+            font=("Arial", 11, "bold")
         )
         self.action_btn.pack(pady=(0, 10))
         
@@ -1063,8 +987,7 @@ class PokerAssistant(tk.Tk):
         analysis_container = tk.Frame(right_panel, bg=C_PANEL, bd=1, relief="groove")
         analysis_container.pack(fill="both", expand=True)
         
-        # Analysis header
-        header_bar = tk.Frame(analysis_container, bg="#0e7490", height=40)
+        header_bar = tk.Frame(analysis_container, bg=C_BTN_PRIMARY, height=40)
         header_bar.pack(fill="x")
         header_bar.pack_propagate(False)
         
@@ -1072,19 +995,16 @@ class PokerAssistant(tk.Tk):
             header_bar,
             text="ANALYSIS & RECOMMENDATIONS",
             font=("Arial", 12, "bold"),
-            bg="#0e7490",
-            fg="white"
+            bg=C_BTN_PRIMARY,
+            fg="black"
         ).pack(expand=True)
         
-        # Content area
         content_area = tk.Frame(analysis_container, bg=C_BG)
         content_area.pack(fill="both", expand=True, padx=10, pady=10)
         
-        # Left: Main analysis
         left_content = tk.Frame(content_area, bg=C_BG)
         left_content.pack(side="left", fill="both", expand=True, padx=(0, 10))
         
-        # Decision display
         self.decision_frame = tk.Frame(left_content, bg=C_BG, height=80)
         self.decision_frame.pack(fill="x", pady=(0, 10))
         self.decision_frame.pack_propagate(False)
@@ -1098,7 +1018,6 @@ class PokerAssistant(tk.Tk):
         )
         self.decision_label.pack(expand=True)
         
-        # Main text with scrollbar
         text_frame = tk.Frame(left_content, bg=C_BG)
         text_frame.pack(fill="both", expand=True)
         
@@ -1121,7 +1040,6 @@ class PokerAssistant(tk.Tk):
         self.out_body.pack(side="left", fill="both", expand=True)
         scrollbar.config(command=self.out_body.yview)
         
-        # Showdown buttons
         showdown_frame = tk.Frame(left_content, bg=C_BG)
         showdown_frame.pack(fill="x", pady=(10, 0))
         
@@ -1143,7 +1061,6 @@ class PokerAssistant(tk.Tk):
         )
         lost_btn.pack(side="left")
         
-        # Right: Quick stats
         right_content = tk.Frame(content_area, bg="#2a2a2a", width=280, bd=1, relief="groove")
         right_content.pack(side="right", fill="y")
         right_content.pack_propagate(False)
@@ -1173,7 +1090,6 @@ class PokerAssistant(tk.Tk):
         )
         self.stats_text.pack(fill="both", expand=True)
         
-        # Configure text tags
         for tw in (self.out_body, self.stats_text):
             tw.tag_configure("header", font=("Arial", 12, "bold"), foreground=C_BTN_PRIMARY, spacing3=8)
             tw.tag_configure("subheader", font=("Arial", 11, "bold"), foreground=C_TEXT, spacing3=5)
@@ -1191,7 +1107,7 @@ class PokerAssistant(tk.Tk):
         
     def _on_players_change(self):
         """Handle number of players change"""
-        self.table_viz.table_rotation = 0  # Reset rotation
+        self.table_viz.table_rotation = 0
         self.table_viz._draw_table()
         self._schedule_refresh()
 
@@ -1223,7 +1139,6 @@ class PokerAssistant(tk.Tk):
         pot = self.current_pot if self.game_started else self.small_blind.get() + self.big_blind.get()
         call = self.call_amt.get()
 
-        # Clear displays
         for w in (self.out_body, self.stats_text):
             w.configure(state="normal")
             w.delete("1.0", "end")
@@ -1236,7 +1151,6 @@ class PokerAssistant(tk.Tk):
             analysis = analyse_hand(hole, board, pos, stack_bb, pot, call)
             self._last_decision_id = record_decision(analysis, pos, tier, stack_bb, pot, call, board_str)
             
-            # Update decision display
             decision_colors = {
                 "RAISE": C_BTN_WARNING,
                 "CALL": C_BTN_SUCCESS,
@@ -1248,7 +1162,6 @@ class PokerAssistant(tk.Tk):
                 fg=decision_colors.get(analysis.decision, C_TEXT)
             )
             
-            # Main analysis
             self.out_body.insert("end", f"Hand: {to_two_card_str(hole)} ({tier.upper()})\n", "header")
             self.out_body.insert("end", f"Board: {board_str or 'Pre-flop'}\n", "metric")
             self.out_body.insert("end", f"Position: {pos.name} | Stack: {stack_bb}BB | Pot: ${pot:.1f}\n\n", "dim")
@@ -1276,7 +1189,6 @@ class PokerAssistant(tk.Tk):
             self.out_body.insert("end", "3. Press START GAME to begin tracking\n", "metric")
             self.out_body.insert("end", "\nDouble-click any card to remove it\n", "dim")
 
-        # Quick stats
         self.stats_text.insert("end", "WIN RATE\n", "header")
         with open_db() as db:
             wins, total = db.execute(
@@ -1378,10 +1290,6 @@ class PokerAssistant(tk.Tk):
                 self.refresh()
                 return
         messagebox.showinfo("No slot", "All card slots are full.")
-
-# ─────────────────────────────────────────────────────────────────────────────
-# 12. Main Entry Point
-# ─────────────────────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
     app = PokerAssistant()
