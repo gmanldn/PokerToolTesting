@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from enum import Enum, IntEnum
 from pathlib import Path
-from typing import List, Sequence, Dict, Optional
+from typing import List, Sequence, Dict, Optional, Tuple
 
 import tkinter as tk
 from tkinter import ttk, messagebox, simpledialog
@@ -60,6 +60,8 @@ C_BTN_WARNING_HOVER = "#fbbf24"
 C_BTN_INFO_HOVER = "#60a5fa"
 C_BTN_DARK_HOVER = "#4b5563"
 
+# --- Behavioral constants for analysis ---
+# These are heuristic base values, adjusted by game state
 POSITION_BULLY = {1: 1.0, 2: 0.7, 3: 0.5, 4: 0.4, 5: 0.6, 6: 0.85}
 HAND_BULLY = {
     "premium": 1.0,
@@ -133,6 +135,27 @@ class PlayerAction(str, Enum):
     RAISE = "Raise"
 
 
+class Street(str, Enum):
+    PREFLOP = "Pre-flop"
+    FLOP = "Flop"
+    TURN = "Turn"
+    RIVER = "River"
+
+    @classmethod
+    def from_board_len(cls, n_cards: int) -> "Street":
+        return {0: cls.PREFLOP, 3: cls.FLOP, 4: cls.TURN, 5: cls.RIVER}[n_cards]
+
+
+@dataclass(slots=True, frozen=True)
+class BoardTexture:
+    street: Street
+    text: str
+    is_paired: bool
+    is_monotone: bool
+    is_connected: bool
+    high_card_rank: int
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 3.  Pure poker mathematics – no GUI code
 # ─────────────────────────────────────────────────────────────────────────────
@@ -147,6 +170,7 @@ HAND_TIERS = {
 
 
 def to_two_card_str(two: Sequence[Card]) -> str:
+    """Converts two cards to a standard string representation (e.g., 'AKs', '77')."""
     if len(two) != 2:
         return ""
     a, b = two
@@ -158,6 +182,7 @@ def to_two_card_str(two: Sequence[Card]) -> str:
 
 
 def hand_tier(two: Sequence[Card]) -> str:
+    """Classifies a two-card hand into a tier."""
     code = to_two_card_str(two)
     for tier, hands in HAND_TIERS.items():
         if code in hands:
@@ -165,24 +190,63 @@ def hand_tier(two: Sequence[Card]) -> str:
     return "trash"
 
 
+def analyze_board_texture(board: Sequence[Card]) -> BoardTexture:
+    """Analyzes the given board cards for draws, pairs, etc."""
+    n = len(board)
+    street = Street.from_board_len(n)
+    if n == 0:
+        return BoardTexture(street, "Pre-flop", False, False, False, -1)
+
+    ranks = sorted([c.value for c in board])
+    suits = [c.suit for c in board]
+
+    is_paired = len(set(ranks)) < n
+    is_monotone = len(set(suits)) == 1 if n >= 3 else False
+    
+    # Check for straight possibility (e.g., 3-gap or less)
+    is_connected = False
+    if n >= 3:
+        gaps = [ranks[i+1] - ranks[i] for i in range(n-1)]
+        if ranks[-1] - ranks[0] <= 4 or sum(gaps) - len(gaps) <= 2:
+            is_connected = True
+
+    # Describe texture
+    parts = []
+    if is_monotone: parts.append("Monotone")
+    elif len(set(suits)) == 2 and n >= 3: parts.append("Two-tone")
+    if is_paired: parts.append("Paired")
+    if is_connected: parts.append("Connected")
+    
+    text = ", ".join(parts) if parts else "Dry"
+    high_card_rank = ranks[-1]
+    
+    return BoardTexture(street, text, is_paired, is_monotone, is_connected, high_card_rank)
+
+
 def _tcard(c: Card) -> int:
+    """Converts a Card object to its integer representation for `treys`."""
     suit_map = {Suit.SPADE: "s", Suit.HEART: "h", Suit.DIAMOND: "d", Suit.CLUB: "c"}
     return TCard.new(c.rank + suit_map[c.suit])
 
 
-# ----- Equity ----------------------------------------------------------------
 def _enumerate_equity(hole: Sequence[Card], board: Sequence[Card]) -> float:
     """Exact equity when ≤2 unknown board cards (turn or river)."""
     deck = [c for c in FULL_DECK if c not in hole and c not in board]
     wins = ties = total = 0
+    hero_hole = [_tcard(c) for c in hole]
+
     for opp in itertools.combinations(deck, 2):
-        remain = 5 - len(board)
-        for runout in itertools.combinations([c for c in deck if c not in opp], remain):
+        opp_hole = [_tcard(c) for c in opp]
+        remain_deck = [c for c in deck if c not in opp]
+        
+        remain_board_count = 5 - len(board)
+        for runout_cards in itertools.combinations(remain_deck, remain_board_count):
             total += 1
-            h1 = _TREYS.evaluate([_tcard(c) for c in board + list(runout)],
-                                 [_tcard(c) for c in hole])
-            h2 = _TREYS.evaluate([_tcard(c) for c in board + list(runout)],
-                                 [_tcard(c) for c in opp])
+            board_cards = [_tcard(c) for c in board + list(runout_cards)]
+            
+            h1 = _TREYS.evaluate(board_cards, hero_hole)
+            h2 = _TREYS.evaluate(board_cards, opp_hole)
+
             if h1 < h2:
                 wins += 1
             elif h1 == h2:
@@ -192,58 +256,73 @@ def _enumerate_equity(hole: Sequence[Card], board: Sequence[Card]) -> float:
 
 def adaptive_equity(hole: Sequence[Card], board: Sequence[Card]) -> float:
     """Smart equity: exact when cheap, adaptive Monte-Carlo otherwise."""
-    unknown = 5 - len(board)
-    if unknown <= 2:
+    unknown_cards = 5 - len(board)
+    if unknown_cards <= 2:
         return _enumerate_equity(hole, board)
 
     deck = [c for c in FULL_DECK if c not in hole and c not in board]
-    rough = 1.0 - _TREYS.evaluate([], [_tcard(c) for c in hole]) / _TREYS.MAX_SCORE
-    n_samples = int(min(4000, max(800, 1200 / max(0.03, rough * (1 - rough)))))
+    hero_hole = [_tcard(c) for c in hole]
+    
+    # Rough equity estimate to determine sample size
+    rough_win_prob = 1.0 - (_TREYS.get_rank_class(_TREYS.evaluate([], hero_hole)) / 9.0)
+    variance_proxy = max(0.05, rough_win_prob * (1 - rough_win_prob))
+    n_samples = int(min(5000, max(1000, 1500 / variance_proxy)))
+    
     wins = ties = 0
     for _ in range(n_samples):
-        opp = random.sample(deck, 2)
-        runout = random.sample([c for c in deck if c not in opp], unknown)
-        h1 = _TREYS.evaluate([_tcard(c) for c in board + runout], [_tcard(c) for c in hole])
-        h2 = _TREYS.evaluate([_tcard(c) for c in board + runout], [_tcard(c) for c in opp])
+        runout_and_opp = random.sample(deck, 2 + unknown_cards)
+        opp_hole_cards = runout_and_opp[:2]
+        runout = runout_and_opp[2:]
+
+        board_cards = [_tcard(c) for c in board + runout]
+        opp_hole = [_tcard(c) for c in opp_hole_cards]
+
+        h1 = _TREYS.evaluate(board_cards, hero_hole)
+        h2 = _TREYS.evaluate(board_cards, opp_hole)
+
         if h1 < h2:
             wins += 1
         elif h1 == h2:
             ties += 1
+
     return (wins + ties / 2) / n_samples
 
 
-def pot_odds(call: float, pot: float) -> float:
-    return call / (pot + call) if call else 0.0
+def pot_odds(to_call: float, pot_size: float) -> float:
+    return to_call / (pot_size + to_call) if to_call > 0 else 0.0
 
 
-def expected_value(eq: float, pot: float, invest: float) -> float:
-    return eq * (pot + invest) - invest
+def expected_value(equity: float, pot_size: float, investment: float) -> float:
+    return equity * (pot_size + investment) - investment
 
 
 def logistic_stack_factor(bb: int) -> float:
-    """Smooth 1.0 → 2.0 increase around 80bb, capped at 2.0"""
+    """Smooth 1.0 → 2.0 increase around 80bb, capped at 2.0. Models deep stack aggression."""
     return 1.0 + 1.0 / (1.0 + math.exp(-(bb - 80) / 20))
 
 
 @dataclass(slots=True)
 class Analysis:
+    """Container for the results of a hand analysis."""
     equity: float
     required_eq: float
     ev_call: float
     ev_raise: float
     spr: float
-    aggression: float
+    aggression_factor: float
     decision: str
+    reason: str
+    board_texture: BoardTexture
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 4.  Persistence – SQLite
 # ─────────────────────────────────────────────────────────────────────────────
-DB_PATH = Path("poker_assistant.sqlite3")
-
+DB_PATH = Path("poker_assistant_v9.sqlite3")
 
 @contextmanager
 def open_db():
+    # Note: If changing schema, you may need to delete the old DB file.
     con = sqlite3.connect(DB_PATH, timeout=3.0)
     con.execute("""
         CREATE TABLE IF NOT EXISTS decisions (
@@ -258,6 +337,8 @@ def open_db():
             required_eq  REAL,
             ev_call      REAL,
             ev_raise     REAL,
+            street       TEXT,
+            board        TEXT,
             decision     TEXT,
             showdown_win INTEGER
         );""")
@@ -268,29 +349,30 @@ def open_db():
         con.close()
 
 
-def record_decision(a: Analysis, pos: Position, tier: str,
-                    stack_bb: int, pot: float, to_call: float) -> int:
+def record_decision(a: Analysis, pos: Position, tier: str, stack_bb: int,
+                    pot: float, to_call: float, board_str: str) -> int:
+    """Records a decision and its context into the database."""
     with open_db() as db:
         cur = db.execute("""INSERT INTO decisions
-            (position,tier,stack_bb,pot,to_call,equity,required_eq,
-             ev_call,ev_raise,decision)
-             VALUES (?,?,?,?,?,?,?,?,?,?)""",
-             (pos.name, tier, stack_bb, pot, to_call,
-              a.equity, a.required_eq, a.ev_call, a.ev_raise, a.decision))
+            (position, tier, stack_bb, pot, to_call, equity, required_eq,
+             ev_call, ev_raise, street, board, decision)
+             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+             (pos.name, tier, stack_bb, pot, to_call, a.equity, a.required_eq,
+              a.ev_call, a.ev_raise, a.board_texture.street.value, board_str, a.decision))
         return cur.lastrowid
 
 
-def historical_fold_equity(pos: Position, tier: str) -> float:
-    """Empirical villain-fold frequency after our raise (Laplace-smoothed)."""
+def historical_fold_equity(pos: Position, tier: str, street: Street) -> float:
+    """Empirical villain-fold frequency after our raise, given context."""
     with open_db() as db:
         cur = db.execute("""SELECT COUNT(*),
                                    SUM(CASE WHEN showdown_win IS NULL THEN 1 ELSE 0 END)
                             FROM decisions
-                            WHERE position=? AND tier=? AND decision='RAISE'""",
-                         (pos.name, tier))
-        total, no_show = cur.fetchone()
-    return (no_show + 1) / (total + 4) if total else 0.25
-
+                            WHERE position=? AND tier=? AND street=? AND decision='RAISE'""",
+                         (pos.name, tier, street.value))
+        total, no_showdown = cur.fetchone()
+    # Laplace smoothing to avoid zero-division and provide a reasonable prior
+    return (no_showdown + 1) / (total + 4) if total else 0.25 # Prior: 25% fold equity
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 5.  Analysis wrapper
@@ -303,101 +385,139 @@ def analyse_hand(
     pot: float,
     to_call: float,
 ) -> Analysis:
-    equity = adaptive_equity(hole, board)
-    required = pot_odds(to_call, pot)
-    ev_call = expected_value(equity, pot, to_call)
+    """
+    Performs a comprehensive analysis of the poker hand situation.
 
+    This is the core decision-making engine. It evaluates equity, board texture,
+    and game state variables to recommend a course of action.
+    """
+    board_texture = analyze_board_texture(board)
+    equity = adaptive_equity(hole, board)
+    required_eq = pot_odds(to_call, pot)
+    ev_call = expected_value(equity, pot, to_call)
+    spr = stack_bb / pot if pot > 0 else float("inf")
     tier = hand_tier(hole)
-    aggression = (
+
+    # Adjust base aggression by board texture; wet boards encourage more aggression
+    # with strong hands to deny equity, and also for semi-bluffs.
+    texture_mod = 1.2 if board_texture.is_connected or board_texture.is_monotone else 0.95
+    aggression_factor = (
         POSITION_BULLY[pos]
         * HAND_BULLY[tier]
         * logistic_stack_factor(stack_bb)
+        * texture_mod
     )
+    
+    # Model a standard raise
+    raise_amt = max(to_call * 2.5, pot * 0.75) if to_call > 0 else pot * 0.75
 
-    # simple raise model
-    raise_amt = max(to_call * 2, pot * 0.75)
+    # Estimate fold equity using historical data and current situation
+    # Scary boards (Ace high, paired, etc.) increase fold equity.
+    board_scare_factor = 0.0
+    if board_texture.high_card_rank >= 12: board_scare_factor += 0.1 # Ace
+    if board_texture.is_paired: board_scare_factor += 0.1
+    hist_fe = historical_fold_equity(pos, tier, board_texture.street)
+    fold_equity = 0.6 * hist_fe + 0.4 * min(0.40, aggression_factor * 0.20 + board_scare_factor)
 
-    hist_fe = historical_fold_equity(pos, tier)
-    fold_equity = 0.7 * hist_fe + 0.3 * min(0.30, aggression * 0.25)
+    # Calculate EV of raising, considering when opponent folds vs. calls
+    ev_raise = (fold_equity * pot) + (1 - fold_equity) * expected_value(equity, pot, raise_amt)
 
-    ev_raise = fold_equity * pot + (1 - fold_equity) * expected_value(equity, pot, raise_amt)
+    #--- Decision Logic ---
+    decision, reason = "FOLD", "Default action; does not meet call/raise criteria."
+    ev_fold = 0.0
 
-    decision = "CALL" if equity >= required else "FOLD"
-    if aggression > 1.05 and ev_raise > 0:
+    # Primary Decision: Compare EVs
+    if ev_raise > ev_call and ev_raise > ev_fold:
         decision = "RAISE"
+        reason = f"Raising has the highest EV (${ev_raise:.2f})."
+        if equity < 0.5: # Bluff or semi-bluff
+            reason += " This is a pressure play (semi-bluff) exploiting fold equity."
+        else:
+            reason += " This is a play for value with a strong holding."
+    elif ev_call > ev_fold:
+        decision = "CALL"
+        reason = f"Calling is profitable (EV ${ev_call:.2f}) and better than folding."
+    
+    # Heuristic Overrides for common situations
+    
+    # 1. Implied Odds: Justify a call with a strong draw even if slightly unprofitable now.
+    is_strong_draw = tier == "spec" and board_texture.street != Street.RIVER
+    if decision == "FOLD" and is_strong_draw and spr > 5 and required_eq < 0.35:
+        if (required_eq - equity) < 0.10: # If we are close
+            decision = "CALL"
+            reason = "Pot odds are slightly unfavorable, but implied odds with a strong draw and deep stacks justify a call."
+    
+    # 2. Pot Control: Avoid bloating the pot with a marginal hand out of position.
+    is_marginal_made_hand = tier in ("decent", "marginal")
+    is_oop = pos in (Position.SB, Position.BB, Position.UTG)
+    if decision == "RAISE" and is_marginal_made_hand and is_oop and ev_raise < ev_call * 1.25:
+        decision = "CALL"
+        reason = "Raising is barely better than calling. Pot control by calling is prudent with a marginal hand out of position."
 
-    spr = stack_bb / pot if pot else float("inf")
+    # 3. Zero-call check
+    if to_call == 0 and decision == "FOLD":
+        decision = "CHECK"
+        reason = "No cost to see the next card; checking is the obvious choice."
 
-    return Analysis(equity, required, ev_call, ev_raise, spr, aggression, decision)
-
-
+    return Analysis(equity, required_eq, ev_call, ev_raise, spr, aggression_factor, decision, reason, board_texture)
 # ─────────────────────────────────────────────────────────────────────────────
-# 6.  Advice helpers (unchanged from v8)
+# 6.  Advice helpers (Now with more context!)
 # ─────────────────────────────────────────────────────────────────────────────
 def get_position_advice(pos: Position) -> str:
     advice = {
-        Position.BTN: "Button - Most powerful position. Wide opening range, aggressive 3-betting.",
-        Position.SB: "Small Blind - Worst position. Play tight, complete selectively.",
-        Position.BB: "Big Blind - Defend wide vs steals, but careful postflop OOP.",
-        Position.UTG: "Under the Gun - Tightest range. Premium hands only.",
-        Position.MP: "Middle Position - Moderate range. Balance value and playability.",
-        Position.CO: "Cutoff - Second best position. Open wide, attack blinds."
+        Position.BTN: "You're on the Button, the most powerful position. You can play a wide range of hands, steal blinds, and apply maximum pressure post-flop.",
+        Position.SB: "You're in the Small Blind, the worst position post-flop. Play a tight, strong range. Avoid speculative hands unless completing for a cheap price multiway.",
+        Position.BB: "You're in the Big Blind. You get great pot odds to defend, so play wide. However, be cautious post-flop as you will be out of position.",
+        Position.UTG: "You're Under the Gun, the earliest position. Play only your strongest hands. Your range should be very tight here.",
+        Position.MP: "You're in Middle Position. Your opening range should be tighter than late position but wider than UTG. Hand selection is key.",
+        Position.CO: "You're in the Cutoff, a powerful late position. Open with a wide range, especially if the button is passive. Attack the blinds aggressively."
     }
     return advice.get(pos, "")
 
 
-def get_hand_advice(tier: str, _board_texture: str) -> str:
-    if tier == "premium":
-        return "Premium hand - Build the pot, rarely fold."
-    elif tier == "strong":
-        return "Strong hand - Value bet often, protect against draws."
-    elif tier == "decent":
-        return "Decent hand - Play cautiously multiway."
-    elif tier == "marginal":
-        return "Marginal hand - Pot control, avoid bloated pots."
-    elif tier == "weak":
-        return "Weak hand - Set mine cheaply, fold to aggression."
-    elif tier == "spec":
-        return "Speculative hand - Play in position, look for multiway pots."
-    else:
-        return "Trash hand - Fold preflop unless defending BB or stealing."
+def get_hand_advice(tier: str, texture: BoardTexture, spr: float) -> str:
+    """Generates dynamic advice based on hand strength and board texture."""
+    base_advice = {
+        "premium": "You have a premium hand, the nuts of your range. Focus on building the pot. Rarely consider folding.",
+        "strong": "You have a strong made hand. Bet for value and to protect your equity against draws.",
+        "decent": "A decent hand, but vulnerable. Proceed with caution, especially against aggression or on scary boards. Pot control is often a good idea.",
+        "marginal": "A marginal made hand. Try to get to showdown cheaply. Be wary of multiway pots or heavy betting.",
+        "weak": "This is a weak made hand, likely for set-mining. If you haven't hit your set, fold to any significant bet.",
+        "spec": "A speculative drawing hand. Your play depends on pot odds, implied odds (check SPR!), and position. These hands play best in position.",
+        "trash": "A trash hand. This should almost always be folded pre-flop. If you've reached post-flop, don't invest more money without significant improvement."
+    }[tier]
+
+    # Add texture-specific refinement
+    if texture.street != Street.PREFLOP:
+        if texture.is_monotone or texture.is_connected:
+            if tier in ('premium', 'strong'):
+                base_advice += " The board is very wet and dangerous; be prepared for action and consider larger bet sizes to deny equity to draws."
+            if tier == 'spec':
+                base_advice += " This wet board is excellent for your speculative hand's potential. You may have a strong draw (or a monster already)."
+        elif spr < 4:
+             if tier in ('premium', 'strong'):
+                base_advice += " With a low SPR, you should be looking to get all-in. Don't slow play."
 
 
-def analyze_board_texture(board: Sequence[Card]) -> str:
-    if not board:
-        return "Pre-flop"
-    return f"{len(board)} board cards"
-
+    return base_advice
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 7.  Custom Dialogs and Reusable Button Class
+# 7.  Custom Dialogs and Reusable Button Class (UNCHANGED)
 # ─────────────────────────────────────────────────────────────────────────────
 class StyledButton(tk.Button):
     """High contrast button with consistent styling"""
     def __init__(self, parent, text="", color=C_BTN_PRIMARY, hover_color=None, **kwargs):
-        # Default styling
         defaults = {
-            "font": ("Arial", 11, "bold"),
-            "fg": "white",
-            "bg": color,
-            "activebackground": hover_color or color,
-            "activeforeground": "white",
-            "bd": 0,
-            "padx": 15,
-            "pady": 8,
-            "cursor": "hand2",
-            "relief": "flat"
+            "font": ("Arial", 11, "bold"), "fg": "white", "bg": color,
+            "activebackground": hover_color or color, "activeforeground": "white",
+            "bd": 0, "padx": 15, "pady": 8, "cursor": "hand2", "relief": "flat"
         }
         defaults.update(kwargs)
-        
         super().__init__(parent, text=text, **defaults)
-        
-        # Hover effects
         self._bg = color
         self._hover_bg = hover_color or color
         self.bind("<Enter>", lambda e: self.config(bg=self._hover_bg))
         self.bind("<Leave>", lambda e: self.config(bg=self._bg))
-
 
 class PlayerActionDialog(tk.Toplevel):
     def __init__(self, parent, player_num: int, current_pot: float):
@@ -406,71 +526,48 @@ class PlayerActionDialog(tk.Toplevel):
         self.geometry("450x220")
         self.configure(bg=C_PANEL)
         self.resizable(False, False)
-        
-        # Modal dialog
         self.transient(parent)
         self.grab_set()
-        
-        self.result: Optional[tuple[PlayerAction, float]] = None
+        self.result: Optional[Tuple[PlayerAction, float]] = None
         self.current_pot = current_pot
-        
-        # Center the dialog
         self.update_idletasks()
         x = (self.winfo_screenwidth() // 2) - (self.winfo_width() // 2)
         y = (self.winfo_screenheight() // 2) - (self.winfo_height() // 2)
         self.geometry(f"+{x}+{y}")
-        
         self._build_ui(player_num)
-        
     def _build_ui(self, player_num: int):
-        # Header
         header = tk.Label(self, text=f"What did Player {player_num} do?",
                          font=("Arial", 16, "bold"), bg=C_PANEL, fg=C_TEXT)
         header.pack(pady=(20, 10))
-        
-        # Current pot info
         pot_label = tk.Label(self, text=f"Current Pot: ${self.current_pot:.1f}",
                             font=("Arial", 12), bg=C_PANEL, fg=C_TEXT)
         pot_label.pack(pady=5)
-        
-        # Button frame
         btn_frame = tk.Frame(self, bg=C_PANEL)
         btn_frame.pack(pady=20)
-        
-        # Action buttons
-        fold_btn = StyledButton(btn_frame, text="FOLD", 
+        fold_btn = StyledButton(btn_frame, text="FOLD",
                                color=C_BTN_DANGER, hover_color=C_BTN_DANGER_HOVER,
                                width=10, height=2,
                                command=lambda: self._set_result(PlayerAction.FOLD, 0))
         fold_btn.pack(side="left", padx=10)
-        
-        check_btn = StyledButton(btn_frame, text="CHECK/CALL", 
+        check_btn = StyledButton(btn_frame, text="CHECK/CALL",
                                 color=C_BTN_INFO, hover_color=C_BTN_INFO_HOVER,
                                 width=12, height=2,
                                 command=lambda: self._set_result(PlayerAction.CALL, 0))
         check_btn.pack(side="left", padx=10)
-        
-        raise_btn = StyledButton(btn_frame, text="RAISE", 
+        raise_btn = StyledButton(btn_frame, text="RAISE",
                                 color=C_BTN_WARNING, hover_color=C_BTN_WARNING_HOVER,
-                                width=10, height=2,
-                                command=self._handle_raise)
+                                width=10, height=2, command=self._handle_raise)
         raise_btn.pack(side="left", padx=10)
-        
-        # Skip button at bottom
-        skip_btn = StyledButton(self, text="Skip (Unknown)", 
+        skip_btn = StyledButton(self, text="Skip (Unknown)",
                                color=C_BTN_DARK, hover_color=C_BTN_DARK_HOVER,
                                width=20, command=self.destroy)
         skip_btn.pack(pady=(0, 10))
-        
     def _set_result(self, action: PlayerAction, amount: float):
         self.result = (action, amount)
         self.destroy()
-        
     def _handle_raise(self):
-        # Ask for raise amount
-        amount_str = simpledialog.askstring("Raise Amount", 
-                                           "Enter raise amount:",
-                                           parent=self)
+        amount_str = simpledialog.askstring("Raise Amount",
+                                           "Enter raise amount:", parent=self)
         if amount_str:
             try:
                 amount = float(amount_str)
@@ -478,24 +575,15 @@ class PlayerActionDialog(tk.Toplevel):
             except ValueError:
                 messagebox.showerror("Invalid Input", "Please enter a valid number")
 
-
 # ─────────────────────────────────────────────────────────────────────────────
-# 8.  GUI widgets
+# 8.  GUI widgets (UNCHANGED)
 # ─────────────────────────────────────────────────────────────────────────────
 class DraggableCard(tk.Label):
     """Label inside grid – supports click & drag."""
-
     def __init__(self, master: tk.Widget, card: Card, app: "PokerAssistant"):
         super().__init__(
-            master,
-            text=str(card),
-            font=("Arial", 11, "bold"),
-            fg=card.suit.color,
-            bg=C_CARD,
-            width=4,
-            height=3,
-            bd=2,
-            relief="raised",
+            master, text=str(card), font=("Arial", 11, "bold"), fg=card.suit.color,
+            bg=C_CARD, width=4, height=3, bd=2, relief="raised",
         )
         self.card = card
         self._app = weakref.proxy(app)
@@ -504,44 +592,34 @@ class DraggableCard(tk.Label):
         self.bind("<ButtonRelease-1>", self._release)
         self._start = (0, 0)
         self._dragging = False
-
     def _click_start(self, ev):
         self._start = (ev.x, ev.y)
         self._dragging = False
         self.lift()
-
     def _drag(self, ev):
         dx, dy = ev.x - self._start[0], ev.y - self._start[1]
-        if abs(dx) > 3 or abs(dy) > 3:
-            self._dragging = True
+        if abs(dx) > 3 or abs(dy) > 3: self._dragging = True
         self.place(x=self.winfo_x() + dx, y=self.winfo_y() + dy)
-
     def _release(self, ev):
         target = self.winfo_containing(ev.x_root, ev.y_root)
         if self._dragging and hasattr(target, "accept"):
-            target.accept(self)  # type: ignore
+            target.accept(self)
         else:
             self.place_forget()
             self.pack(side="left", padx=1, pady=1)
             self._app.place_next_free(self.card)
 
-
 class CardSlot(tk.Frame):
     def __init__(self, master: tk.Widget, name: str, app: "PokerAssistant"):
         super().__init__(
-            master,
-            width=CARD_SIZE + 10,
-            height=int(CARD_SIZE * 1.4),
-            bg=C_TABLE,
-            bd=3,
-            relief="sunken",
+            master, width=CARD_SIZE + 10, height=int(CARD_SIZE * 1.4),
+            bg=C_TABLE, bd=3, relief="sunken",
         )
         self.pack_propagate(False)
         self._label = tk.Label(self, text=name, bg=C_TABLE, fg=C_TEXT)
         self._label.pack(expand=True)
         self.card: Card | None = None
         self._app = weakref.proxy(app)
-
     def accept(self, widget: DraggableCard):
         if self.card:
             widget.place_forget()
@@ -549,39 +627,28 @@ class CardSlot(tk.Frame):
             return
         self.set_card(widget.card)
         widget.place_forget()
-        widget._app.grey_out(widget.card)  # type: ignore
+        widget._app.grey_out(widget.card)
         self._app.refresh()
-
     def set_card(self, card: Card):
         self.card = card
-        for w in self.winfo_children():
-            w.destroy()
+        for w in self.winfo_children(): w.destroy()
         inner = tk.Label(
-            self,
-            text=str(card),
-            font=("Arial", 14, "bold"),
-            fg=card.suit.color,
-            bg=C_CARD,
-            bd=2,
-            relief="raised",
+            self, text=str(card), font=("Arial", 14, "bold"),
+            fg=card.suit.color, bg=C_CARD, bd=2, relief="raised",
         )
         inner.pack(expand=True, fill="both", padx=3, pady=3)
         inner.bind("<Double-Button-1>", lambda *_: self.clear())
-
     def clear(self):
-        if not self.card:
-            return
+        if not self.card: return
         self._app.un_grey(self.card)
         self.card = None
-        for w in self.winfo_children():
-            w.destroy()
+        for w in self.winfo_children(): w.destroy()
         self._label = tk.Label(self, text="Empty", bg=C_TABLE, fg=C_TEXT)
         self._label.pack(expand=True)
         self._app.refresh()
 
-
 # ─────────────────────────────────────────────────────────────────────────────
-# 9.  Main Tk window
+# 9.  Main Tk window (Logic updated, layout unchanged)
 # ─────────────────────────────────────────────────────────────────────────────
 class PokerAssistant(tk.Tk):
     def __init__(self):
@@ -618,14 +685,12 @@ class PokerAssistant(tk.Tk):
         main_frame = tk.Frame(self, bg=C_BG)
         main_frame.pack(fill="both", expand=True, padx=10, pady=10)
 
-        # Left panel ------------------------------------------------------
+        # Left panel
         left = tk.Frame(main_frame, bg=C_PANEL, width=320)
         left.pack(side="left", fill="y", padx=(0, 10))
         left.pack_propagate(False)
-
         tk.Label(left, text="Card Selection", font=("Arial", 14, "bold"),
                  bg=C_PANEL, fg=C_TEXT).pack(pady=(10, 10))
-
         card_frame = tk.Frame(left, bg=C_PANEL)
         card_frame.pack(fill="both", expand=True)
 
@@ -639,234 +704,98 @@ class PokerAssistant(tk.Tk):
                 w.pack(side="left", padx=1, pady=1)
                 self.grid_cards[str(card)] = w
 
-        # Right side ------------------------------------------------------
+        # Right side
         right = tk.Frame(main_frame, bg=C_BG)
         right.pack(side="left", fill="both", expand=True)
-
         game_frame = tk.Frame(right, bg=C_BG)
         game_frame.pack(fill="x", pady=(0, 10))
-
         table = tk.Frame(game_frame, bg=C_TABLE, bd=4, relief="ridge")
         table.pack(pady=10)
 
-        # Hole cards
-        hole_frame = tk.Frame(table, bg=C_TABLE)
-        hole_frame.pack(side="left", padx=5)
-        tk.Label(hole_frame, text="Your Hand", bg=C_TABLE, fg=C_TEXT,
-                 font=("Arial", 10, "bold")).pack()
-        hole_slots = tk.Frame(hole_frame, bg=C_TABLE)
-        hole_slots.pack()
+        hole_frame = tk.Frame(table, bg=C_TABLE); hole_frame.pack(side="left", padx=5)
+        tk.Label(hole_frame, text="Your Hand", bg=C_TABLE, fg=C_TEXT, font=("Arial", 10, "bold")).pack()
+        hole_slots = tk.Frame(hole_frame, bg=C_TABLE); hole_slots.pack()
         self.hole = [CardSlot(hole_slots, f"Hole{i+1}", self) for i in range(2)]
-        for s in self.hole:
-            s.pack(side="left", padx=2, pady=2)
+        for s in self.hole: s.pack(side="left", padx=2, pady=2)
 
-        # Board
-        board_frame = tk.Frame(table, bg=C_TABLE)
-        board_frame.pack(side="left", padx=10)
-        tk.Label(board_frame, text="Community Cards", bg=C_TABLE, fg=C_TEXT,
-                 font=("Arial", 10, "bold")).pack()
-        board_slots = tk.Frame(board_frame, bg=C_TABLE)
-        board_slots.pack()
-        self.board = [CardSlot(board_slots, n, self)
-                      for n in ("Flop1", "Flop2", "Flop3", "Turn", "River")]
-        for s in self.board:
-            s.pack(side="left", padx=2, pady=2)
+        board_frame = tk.Frame(table, bg=C_TABLE); board_frame.pack(side="left", padx=10)
+        tk.Label(board_frame, text="Community Cards", bg=C_TABLE, fg=C_TEXT, font=("Arial", 10, "bold")).pack()
+        board_slots = tk.Frame(board_frame, bg=C_TABLE); board_slots.pack()
+        self.board = [CardSlot(board_slots, n, self) for n in ("Flop1", "Flop2", "Flop3", "Turn", "River")]
+        for s in self.board: s.pack(side="left", padx=2, pady=2)
 
-        # Controls --------------------------------------------------------
+        # Controls
         ctrl = tk.LabelFrame(game_frame, text="Game Settings", bg=C_PANEL,
                              font=("Arial", 12, "bold"), fg=C_TEXT, bd=2, relief="groove")
         ctrl.pack(fill="x", pady=10)
-
-        # Top row - dropdowns
-        top_ctrl = tk.Frame(ctrl, bg=C_PANEL)
-        top_ctrl.pack(fill="x", padx=10, pady=10)
-
-        # Configure ttk styles for high contrast
-        style = ttk.Style(self)
-        style.theme_use("alt")
+        top_ctrl = tk.Frame(ctrl, bg=C_PANEL); top_ctrl.pack(fill="x", padx=10, pady=10)
+        style = ttk.Style(self); style.theme_use("alt")
+        style.configure("HC.TCombobox", fieldbackground=C_BTN_DARK, background=C_BTN_DARK,
+                       foreground="white", borderwidth=0, arrowcolor="white",
+                       selectbackground=C_BTN_PRIMARY, selectforeground="white")
+        style.map("HC.TCombobox", fieldbackground=[("readonly", C_BTN_DARK)], background=[("active", C_BTN_DARK_HOVER)])
         
-        # Combobox styling
-        style.configure("HC.TCombobox",
-                       fieldbackground=C_BTN_DARK,
-                       background=C_BTN_DARK,
-                       foreground="white",
-                       borderwidth=0,
-                       arrowcolor="white",
-                       selectbackground=C_BTN_PRIMARY,
-                       selectforeground="white")
-        style.map("HC.TCombobox", 
-                 fieldbackground=[("readonly", C_BTN_DARK)],
-                 background=[("active", C_BTN_DARK_HOVER)])
+        tk.Label(top_ctrl, text="Position:", bg=C_PANEL, fg=C_TEXT, font=("Arial", 11, "bold")).grid(row=0, column=0, padx=5, sticky="w")
+        pos_cb = ttk.Combobox(top_ctrl, textvariable=self.position, values=[p.name for p in Position], state="readonly", width=8, style="HC.TCombobox")
+        pos_cb.grid(row=0, column=1, padx=5, sticky="w"); pos_cb.bind("<<ComboboxSelected>>", lambda *_: self.refresh())
+        tk.Label(top_ctrl, text="Stack:", bg=C_PANEL, fg=C_TEXT, font=("Arial", 11, "bold")).grid(row=0, column=2, padx=5, sticky="w")
+        stack_cb = ttk.Combobox(top_ctrl, textvariable=self.stack_type, values=[s.value for s in StackType], state="readonly", width=8, style="HC.TCombobox")
+        stack_cb.grid(row=0, column=3, padx=5, sticky="w"); stack_cb.bind("<<ComboboxSelected>>", lambda *_: self.refresh())
+        tk.Label(top_ctrl, text="Players:", bg=C_PANEL, fg=C_TEXT, font=("Arial", 11, "bold")).grid(row=0, column=4, padx=5, sticky="w")
+        spin_frame = tk.Frame(top_ctrl, bg=C_BTN_DARK, bd=1, relief="solid"); spin_frame.grid(row=0, column=5, padx=5, sticky="w")
+        players_entry = tk.Entry(spin_frame, textvariable=self.num_players, width=3, bg=C_BTN_DARK, fg="white", bd=0, font=("Arial", 11), justify="center"); players_entry.pack(side="left", padx=5, pady=5)
+        spin_up = tk.Button(spin_frame, text="▲", bg=C_BTN_DARK, fg="white", bd=0, font=("Arial", 8), width=2, command=lambda: self.num_players.set(min(9, self.num_players.get() + 1))); spin_up.pack(side="top", fill="x")
+        spin_down = tk.Button(spin_frame, text="▼", bg=C_BTN_DARK, fg="white", bd=0, font=("Arial", 8), width=2, command=lambda: self.num_players.set(max(2, self.num_players.get() - 1))); spin_down.pack(side="bottom", fill="x")
 
-        # Layout controls in grid
-        tk.Label(top_ctrl, text="Position:", bg=C_PANEL, fg=C_TEXT,
-                font=("Arial", 11, "bold")).grid(row=0, column=0, padx=5, sticky="w")
-        pos_cb = ttk.Combobox(top_ctrl, textvariable=self.position,
-                              values=[p.name for p in Position], state="readonly", 
-                              width=8, style="HC.TCombobox")
-        pos_cb.grid(row=0, column=1, padx=5, sticky="w")
-        pos_cb.bind("<<ComboboxSelected>>", lambda *_: self.refresh())
-
-        tk.Label(top_ctrl, text="Stack:", bg=C_PANEL, fg=C_TEXT,
-                font=("Arial", 11, "bold")).grid(row=0, column=2, padx=5, sticky="w")
-        stack_cb = ttk.Combobox(top_ctrl, textvariable=self.stack_type,
-                                values=[s.value for s in StackType], state="readonly", 
-                                width=8, style="HC.TCombobox")
-        stack_cb.grid(row=0, column=3, padx=5, sticky="w")
-        stack_cb.bind("<<ComboboxSelected>>", lambda *_: self.refresh())
-        
-        tk.Label(top_ctrl, text="Players:", bg=C_PANEL, fg=C_TEXT,
-                font=("Arial", 11, "bold")).grid(row=0, column=4, padx=5, sticky="w")
-        
-        # Custom spinbox frame for high contrast
-        spin_frame = tk.Frame(top_ctrl, bg=C_BTN_DARK, bd=1, relief="solid")
-        spin_frame.grid(row=0, column=5, padx=5, sticky="w")
-        
-        players_entry = tk.Entry(spin_frame, textvariable=self.num_players, 
-                               width=3, bg=C_BTN_DARK, fg="white", bd=0,
-                               font=("Arial", 11), justify="center")
-        players_entry.pack(side="left", padx=5, pady=5)
-        
-        spin_up = tk.Button(spin_frame, text="▲", bg=C_BTN_DARK, fg="white", bd=0,
-                          font=("Arial", 8), width=2,
-                          command=lambda: self.num_players.set(min(9, self.num_players.get() + 1)))
-        spin_up.pack(side="top", fill="x")
-        
-        spin_down = tk.Button(spin_frame, text="▼", bg=C_BTN_DARK, fg="white", bd=0,
-                            font=("Arial", 8), width=2,
-                            command=lambda: self.num_players.set(max(2, self.num_players.get() - 1)))
-        spin_down.pack(side="bottom", fill="x")
-
-        # Bottom row - entry fields and buttons
-        bottom_ctrl = tk.Frame(ctrl, bg=C_PANEL)
-        bottom_ctrl.pack(fill="x", padx=10, pady=(0, 10))
-
+        bottom_ctrl = tk.Frame(ctrl, bg=C_PANEL); bottom_ctrl.pack(fill="x", padx=10, pady=(0, 10))
         def _validate(num_var: tk.DoubleVar):
             try:
-                if num_var.get() < 0:
-                    raise ValueError
+                if num_var.get() < 0: raise ValueError
             except Exception:
-                messagebox.showwarning("Input error", "Value must be non-negative")
-                num_var.set(0.0)
-            finally:
-                self.refresh()
-
-        # Style entry widgets
-        entry_style = {"bg": C_BTN_DARK, "fg": "white", "bd": 1, 
-                      "insertbackground": "white", "font": ("Arial", 11)}
-
-        tk.Label(bottom_ctrl, text="SB:", bg=C_PANEL, fg=C_TEXT,
-                font=("Arial", 11, "bold")).grid(row=0, column=0, padx=5, sticky="w")
-        sb_e = tk.Entry(bottom_ctrl, textvariable=self.small_blind, width=8, **entry_style)
-        sb_e.grid(row=0, column=1, padx=5, sticky="w")
-        sb_e.bind("<FocusOut>", lambda *_: _validate(self.small_blind))
-
-        tk.Label(bottom_ctrl, text="BB:", bg=C_PANEL, fg=C_TEXT,
-                font=("Arial", 11, "bold")).grid(row=0, column=2, padx=5, sticky="w")
-        bb_e = tk.Entry(bottom_ctrl, textvariable=self.big_blind, width=8, **entry_style)
-        bb_e.grid(row=0, column=3, padx=5, sticky="w")
-        bb_e.bind("<FocusOut>", lambda *_: _validate(self.big_blind))
-
-        tk.Label(bottom_ctrl, text="To Call:", bg=C_PANEL, fg=C_TEXT,
-                font=("Arial", 11, "bold")).grid(row=0, column=4, padx=5, sticky="w")
-        call_e = tk.Entry(bottom_ctrl, textvariable=self.call_amt, width=10, **entry_style)
-        call_e.grid(row=0, column=5, padx=5, sticky="w")
-        call_e.bind("<FocusOut>", lambda *_: _validate(self.call_amt))
-
-        # Control buttons
-        self.go_btn = StyledButton(bottom_ctrl, text="START", 
-                                  color=C_BTN_SUCCESS, hover_color=C_BTN_SUCCESS_HOVER,
-                                  width=8, height=2, font=("Arial", 12, "bold"),
-                                  command=self.start_game)
-        self.go_btn.grid(row=0, column=6, padx=10)
-
-        clear_btn = StyledButton(bottom_ctrl, text="CLEAR", 
-                               color=C_BTN_DARK, hover_color=C_BTN_DARK_HOVER,
-                               width=8, height=2,
-                               command=self.clear_all)
-        clear_btn.grid(row=0, column=7, padx=5)
-
-        # Action button frame
-        self.action_frame = tk.Frame(ctrl, bg=C_PANEL)
-        self.action_frame.pack(fill="x", padx=10, pady=(0, 10))
+                messagebox.showwarning("Input error", "Value must be non-negative"); num_var.set(0.0)
+            finally: self.refresh()
+        entry_style = {"bg": C_BTN_DARK, "fg": "white", "bd": 1, "insertbackground": "white", "font": ("Arial", 11)}
+        tk.Label(bottom_ctrl, text="SB:", bg=C_PANEL, fg=C_TEXT, font=("Arial", 11, "bold")).grid(row=0, column=0, padx=5, sticky="w")
+        sb_e = tk.Entry(bottom_ctrl, textvariable=self.small_blind, width=8, **entry_style); sb_e.grid(row=0, column=1, padx=5, sticky="w"); sb_e.bind("<FocusOut>", lambda *_: _validate(self.small_blind))
+        tk.Label(bottom_ctrl, text="BB:", bg=C_PANEL, fg=C_TEXT, font=("Arial", 11, "bold")).grid(row=0, column=2, padx=5, sticky="w")
+        bb_e = tk.Entry(bottom_ctrl, textvariable=self.big_blind, width=8, **entry_style); bb_e.grid(row=0, column=3, padx=5, sticky="w"); bb_e.bind("<FocusOut>", lambda *_: _validate(self.big_blind))
+        tk.Label(bottom_ctrl, text="To Call:", bg=C_PANEL, fg=C_TEXT, font=("Arial", 11, "bold")).grid(row=0, column=4, padx=5, sticky="w")
+        call_e = tk.Entry(bottom_ctrl, textvariable=self.call_amt, width=10, **entry_style); call_e.grid(row=0, column=5, padx=5, sticky="w"); call_e.bind("<FocusOut>", lambda *_: _validate(self.call_amt))
         
-        self.action_btn = StyledButton(self.action_frame, text="RECORD PLAYER ACTIONS",
-                                      color=C_BTN_PRIMARY, hover_color=C_BTN_PRIMARY_HOVER,
-                                      font=("Arial", 12, "bold"),
-                                      command=self.record_player_actions, state="disabled")
-        self.action_btn.pack()
+        self.go_btn = StyledButton(bottom_ctrl, text="START", color=C_BTN_SUCCESS, hover_color=C_BTN_SUCCESS_HOVER, width=8, height=2, font=("Arial", 12, "bold"), command=self.start_game); self.go_btn.grid(row=0, column=6, padx=10)
+        clear_btn = StyledButton(bottom_ctrl, text="CLEAR", color=C_BTN_DARK, hover_color=C_BTN_DARK_HOVER, width=8, height=2, command=self.clear_all); clear_btn.grid(row=0, column=7, padx=5)
 
-        # Combined Analysis output -------------------------------------------------
-        analysis_frame = tk.LabelFrame(right, text="Poker Analysis & Strategy",
-                                       font=("Arial", 12, "bold"), bg=C_PANEL, fg=C_TEXT,
-                                       bd=2, relief="groove")
+        self.action_frame = tk.Frame(ctrl, bg=C_PANEL); self.action_frame.pack(fill="x", padx=10, pady=(0, 10))
+        self.action_btn = StyledButton(self.action_frame, text="RECORD PLAYER ACTIONS", color=C_BTN_PRIMARY, hover_color=C_BTN_PRIMARY_HOVER, font=("Arial", 12, "bold"), command=self.record_player_actions, state="disabled"); self.action_btn.pack()
+
+        # Analysis output frame
+        analysis_frame = tk.LabelFrame(right, text="Poker Analysis & Strategy", font=("Arial", 12, "bold"), bg=C_PANEL, fg=C_TEXT, bd=2, relief="groove")
         analysis_frame.pack(fill="both", expand=True, pady=(10, 0))
-
-        # Header
-        header_frame = tk.Frame(analysis_frame, bg=C_BTN_PRIMARY)
-        header_frame.pack(fill="x", padx=5, pady=(5, 0))
-        self.out_head = tk.Text(header_frame, height=3, font=("Arial", 11, "bold"),
-                                bg=C_BTN_PRIMARY, fg="white", wrap="word", relief="flat",
-                                padx=15, pady=10)
-        self.out_head.pack(fill="x")
-
-        # Main content area with two columns
-        content_frame = tk.Frame(analysis_frame, bg=C_BG)
-        content_frame.pack(fill="both", expand=True, padx=5, pady=5)
-
-        # Left column - Main analysis
-        left_col = tk.Frame(content_frame, bg=C_BG)
-        left_col.pack(side="left", fill="both", expand=True, padx=(0, 5))
-
-        scrollbar = tk.Scrollbar(left_col)
-        scrollbar.pack(side="right", fill="y")
-
-        self.out_body = tk.Text(left_col, font=("Consolas", 10),
-                                bg=C_BG, fg=C_TEXT, wrap="word",
-                                yscrollcommand=scrollbar.set, relief="solid",
-                                bd=1, padx=15, pady=10)
-        self.out_body.pack(side="left", fill="both", expand=True)
-        scrollbar.config(command=self.out_body.yview)
-
-        # Showdown buttons
-        btn_frame = tk.Frame(left_col, bg=C_BG)
-        btn_frame.pack(fill="x", pady=5)
-
-        won_btn = StyledButton(btn_frame, text="MARK AS WON", 
-                              color=C_BTN_SUCCESS, hover_color=C_BTN_SUCCESS_HOVER,
-                              width=15,
-                              command=lambda: self._mark_showdown(1))
-        won_btn.pack(side="left", padx=5)
+        header_frame = tk.Frame(analysis_frame, bg=C_BTN_PRIMARY); header_frame.pack(fill="x", padx=5, pady=(5, 0))
+        self.out_head = tk.Text(header_frame, height=3, font=("Arial", 11, "bold"), bg=C_BTN_PRIMARY, fg="white", wrap="word", relief="flat", padx=15, pady=10); self.out_head.pack(fill="x")
         
-        lost_btn = StyledButton(btn_frame, text="MARK AS LOST", 
-                               color=C_BTN_DANGER, hover_color=C_BTN_DANGER_HOVER,
-                               width=15,
-                               command=lambda: self._mark_showdown(0))
-        lost_btn.pack(side="left", padx=5)
+        content_frame = tk.Frame(analysis_frame, bg=C_BG); content_frame.pack(fill="both", expand=True, padx=5, pady=5)
+        left_col = tk.Frame(content_frame, bg=C_BG); left_col.pack(side="left", fill="both", expand=True, padx=(0, 5))
+        scrollbar = tk.Scrollbar(left_col); scrollbar.pack(side="right", fill="y")
+        self.out_body = tk.Text(left_col, font=("Consolas", 10), bg=C_BG, fg=C_TEXT, wrap="word", yscrollcommand=scrollbar.set, relief="solid", bd=1, padx=15, pady=10); self.out_body.pack(side="left", fill="both", expand=True); scrollbar.config(command=self.out_body.yview)
+        
+        btn_frame = tk.Frame(left_col, bg=C_BG); btn_frame.pack(fill="x", pady=5)
+        won_btn = StyledButton(btn_frame, text="MARK AS WON", color=C_BTN_SUCCESS, hover_color=C_BTN_SUCCESS_HOVER, width=15, command=lambda: self._mark_showdown(1)); won_btn.pack(side="left", padx=5)
+        lost_btn = StyledButton(btn_frame, text="MARK AS LOST", color=C_BTN_DANGER, hover_color=C_BTN_DANGER_HOVER, width=15, command=lambda: self._mark_showdown(0)); lost_btn.pack(side="left", padx=5)
 
-        # Right column - Quick stats
-        right_col = tk.Frame(content_frame, bg=C_PANEL, width=300, bd=2, relief="groove")
-        right_col.pack(side="right", fill="y", padx=(5, 0))
-        right_col.pack_propagate(False)
+        right_col = tk.Frame(content_frame, bg=C_PANEL, width=300, bd=2, relief="groove"); right_col.pack(side="right", fill="y", padx=(5, 0)); right_col.pack_propagate(False)
+        tk.Label(right_col, text="Quick Stats", font=("Arial", 12, "bold"), bg=C_PANEL, fg=C_TEXT).pack(pady=10)
+        self.stats_text = tk.Text(right_col, font=("Consolas", 11), bg=C_PANEL, fg=C_TEXT, wrap="word", relief="flat", padx=15, pady=10); self.stats_text.pack(fill="both", expand=True)
 
-        tk.Label(right_col, text="Quick Stats", font=("Arial", 12, "bold"),
-                 bg=C_PANEL, fg=C_TEXT).pack(pady=10)
-
-        self.stats_text = tk.Text(right_col, font=("Consolas", 11),
-                                  bg=C_PANEL, fg=C_TEXT, wrap="word",
-                                  relief="flat", padx=15, pady=10)
-        self.stats_text.pack(fill="both", expand=True)
-
-        # Configure tags
-        for tw in (self.out_body, self.stats_text):
+        for tw in (self.out_body, self.stats_text, self.out_head):
             tw.tag_configure("header", font=("Arial", 12, "bold"), foreground=C_BTN_PRIMARY, spacing3=8)
             tw.tag_configure("metric", foreground=C_TEXT)
             tw.tag_configure("positive", foreground=C_BTN_SUCCESS)
             tw.tag_configure("negative", foreground=C_BTN_DANGER)
             tw.tag_configure("decision", font=("Arial", 16, "bold"), foreground=C_BTN_PRIMARY, spacing1=10)
+            tw.tag_configure("reason", font=("Arial", 9, "italic"), foreground="#cccccc", spacing1=3)
             tw.tag_configure("advice", foreground="#bbbbbb", spacing1=3)
             tw.tag_configure("warning", font=("Arial", 10, "bold"), foreground=C_BTN_WARNING)
-            tw.tag_configure("tip", font=("Arial", 10, "italic"), foreground="#8e44ad")
 
     # ─────────────────────────────────────────────────────────────────────
     # grid helpers
@@ -874,218 +803,138 @@ class PokerAssistant(tk.Tk):
         self.used.add(str(card))
         w = self.grid_cards[str(card)]
         w.configure(bg="#666666", relief="sunken", state="disabled", text=f"{card}\n✕")
-
     def un_grey(self, card: Card):
         key = str(card)
         if key in self.used:
             self.used.remove(key)
             w = self.grid_cards[key]
             w.configure(bg=C_CARD, relief="raised", state="normal", text=str(card))
-
     def place_next_free(self, card: Card):
-        if str(card) in self.used:
-            return
+        if str(card) in self.used: return
         for slot in self.hole + self.board:
             if slot.card is None:
-                slot.set_card(card)
-                self.grey_out(card)
-                self.refresh()
-                return
+                slot.set_card(card); self.grey_out(card); self.refresh(); return
         messagebox.showinfo("No slot", "All card slots are full.")
 
     # ─────────────────────────────────────────────────────────────────────
     # Game control methods
     def start_game(self):
         self.game_started = True
-        self.go_btn.configure(text="PLAYING", state="disabled")
-        self.go_btn._bg = C_BTN_DARK
-        self.go_btn._hover_bg = C_BTN_DARK
+        self.go_btn.configure(text="PLAYING", state="disabled", bg=C_BTN_DARK)
+        self.go_btn._bg = self.go_btn._hover_bg = C_BTN_DARK
         self.action_btn.configure(state="normal")
-        
-        # Initialize game state
         self.current_pot = self.small_blind.get() + self.big_blind.get()
         self.players_in_hand = list(range(1, self.num_players.get() + 1))
         self.player_actions.clear()
-        
-        messagebox.showinfo("Game Started", 
-                           f"Game started with {self.num_players.get()} players.\n"
-                           f"Initial pot: ${self.current_pot:.1f}")
-        # Immediately prompt for player actions
+        messagebox.showinfo("Game Started", f"Game started with {self.num_players.get()} players.\nInitial pot: ${self.current_pot:.1f}")
         self.record_player_actions()
-        
+    
     def record_player_actions(self):
         """Record actions for all other players after your turn"""
         if not self.game_started:
             messagebox.showwarning("Not Started", "Please start the game first!")
             return
-            
-        # Get your position in the betting order
-        pos = Position[self.position.get()]
-        your_seat = pos.value  # This maps position to seat number
-        
-        # Track actions for other players
+        your_seat = Position[self.position.get()].value
         actions_recorded = False
         for i in range(1, self.num_players.get() + 1):
-            if i == your_seat or i not in self.players_in_hand:
-                continue
-                
+            if i == your_seat or i not in self.players_in_hand: continue
             dialog = PlayerActionDialog(self, i, self.current_pot)
             self.wait_window(dialog)
-            
             if dialog.result:
                 actions_recorded = True
                 action, amount = dialog.result
                 self.player_actions[i] = (action, amount)
-                
-                # Update pot and players in hand
-                if action == PlayerAction.FOLD:
-                    self.players_in_hand.remove(i)
-                elif action == PlayerAction.CALL:
-                    self.current_pot += self.call_amt.get()
+                if action == PlayerAction.FOLD: self.players_in_hand.remove(i)
+                elif action == PlayerAction.CALL: self.current_pot += self.call_amt.get()
                 elif action == PlayerAction.RAISE:
-                    self.current_pot += amount
-                    self.call_amt.set(amount)
-        
+                    self.current_pot += amount; self.call_amt.set(amount - self.call_amt.get())
         if actions_recorded:
-            self.action_complete = True
-            self.refresh()
-            
-            # Show summary
-            active_players = len(self.players_in_hand)
-            messagebox.showinfo("Actions Recorded", 
-                               f"Actions recorded.\n"
-                               f"Players remaining: {active_players}\n"
-                               f"Current pot: ${self.current_pot:.1f}")
+            self.action_complete = True; self.refresh()
+            messagebox.showinfo("Actions Recorded", f"Actions recorded. Players remaining: {len(self.players_in_hand)}. Current pot: ${self.current_pot:.1f}")
 
     # ─────────────────────────────────────────────────────────────────────
     # analysis cycle
     def refresh(self):
         hole = [s.card for s in self.hole if s.card]
         board = [s.card for s in self.board if s.card]
-
         pos = Position[self.position.get()]
         stack_bb = StackType(self.stack_type.get()).default_bb
-        
-        # Use current pot if game started, otherwise calculate from blinds
-        if self.game_started:
-            pot = self.current_pot
-        else:
-            sb = self.small_blind.get()
-            bb = self.big_blind.get()
-            pot = sb + bb
-        
+        pot = self.current_pot if self.game_started else self.small_blind.get() + self.big_blind.get()
         call = self.call_amt.get()
 
-        # clear text widgets
         for w in (self.out_head, self.out_body, self.stats_text):
-            w.configure(state="normal")
-            w.delete("1.0", "end")
+            w.configure(state="normal"); w.delete("1.0", "end")
 
         game_state = f"Position: {pos.name} | Stack: {stack_bb}BB | Pot: ${pot:.1f} | To Call: ${call:.1f}"
-        if self.game_started:
-            game_state += f" | Players in hand: {len(self.players_in_hand)}"
+        if self.game_started: game_state += f" | Players: {len(self.players_in_hand)}"
 
         if len(hole) == 2:
             tier = hand_tier(hole)
-            self.out_head.insert("end",
-                                 f"Hand: {to_two_card_str(hole)} ({tier.upper()})"
-                                 f" | Board: {' '.join(map(str, board)) or 'Pre-flop'}\n"
-                                 f"{game_state}")
+            board_str = ' '.join(map(str, board))
             analysis = analyse_hand(hole, board, pos, stack_bb, pot, call)
-            # store decision for learning
-            self._last_decision_id = record_decision(analysis, pos, tier, stack_bb, pot, call)
+            self._last_decision_id = record_decision(analysis, pos, tier, stack_bb, pot, call, board_str)
+            
+            self.out_head.insert("end",
+                f"Hand: {to_two_card_str(hole)} ({tier.upper()}) | Board: {board_str or 'Pre-flop'}\n"
+                f"Board Texture: {analysis.board_texture.text} | {game_state}")
 
-            # write body
-            self.out_body.insert("end", "EQUITY\n", "header")
+            self.out_body.insert("end", "DECISION RATIONALE\n", "header")
+            decision_color = {"RAISE": "warning", "CALL": "positive", "FOLD": "negative", "CHECK": "metric"}[analysis.decision]
+            self.out_body.insert("end", f"{analysis.decision}\n", ("decision", decision_color))
+            self.out_body.insert("end", f"{analysis.reason}\n", "reason")
+
+            self.out_body.insert("end", "\nEQUITY ANALYSIS\n", "header")
             diff = analysis.equity - analysis.required_eq
-            tag = "positive" if diff >= 0 else "negative"
             self.out_body.insert("end", f"Your equity      : {analysis.equity:7.1%}\n", "metric")
             self.out_body.insert("end", f"Required equity  : {analysis.required_eq:7.1%}\n", "metric")
-            self.out_body.insert("end", f"Edge             : {diff:+7.1%}\n", tag)
+            self.out_body.insert("end", f"Edge             : {diff:+7.1%}\n", "positive" if diff >= 0 else "negative")
 
-            self.out_body.insert("end", "\nEXPECTED VALUE\n", "header")
-            tag_call = "positive" if analysis.ev_call > 0 else "negative"
-            tag_raise = "positive" if analysis.ev_raise > 0 else "negative"
-            self.out_body.insert("end", f"EV Call   : ${analysis.ev_call:+8.2f}\n", tag_call)
-            self.out_body.insert("end", f"EV Raise  : ${analysis.ev_raise:+8.2f}\n", tag_raise)
+            self.out_body.insert("end", "\nEXPECTED VALUE (EV)\n", "header")
+            self.out_body.insert("end", f"EV Call   : ${analysis.ev_call:+8.2f}\n", "positive" if analysis.ev_call >= 0 else "negative")
+            self.out_body.insert("end", f"EV Raise  : ${analysis.ev_raise:+8.2f}\n", "positive" if analysis.ev_raise >= 0 else "negative")
 
-            self.out_body.insert("end", "\nDECISION\n", "header")
-            
-            # Use appropriate color for decision
-            if analysis.decision == "RAISE":
-                decision_tag = "warning"  
-            elif analysis.decision == "CALL":
-                decision_tag = "header"
-            else:  # FOLD
-                decision_tag = "negative"
-            
-            self.out_body.insert("end", f"{analysis.decision}\n", "decision")
-
-            self.out_body.insert("end", "\nADVICE\n", "header")
+            self.out_body.insert("end", "\nCONTEXTUAL ADVICE\n", "header")
             self.out_body.insert("end", get_position_advice(pos) + "\n", "advice")
-            self.out_body.insert("end", get_hand_advice(tier, ""), "advice")
-            
-            # Show player actions if recorded
-            if self.action_complete and self.player_actions:
-                self.out_body.insert("end", "\n\nPLAYER ACTIONS\n", "header")
-                for player, (action, amount) in sorted(self.player_actions.items()):
-                    if action == PlayerAction.RAISE:
-                        self.out_body.insert("end", f"Player {player}: {action.value} to ${amount:.1f}\n", "metric")
-                    else:
-                        self.out_body.insert("end", f"Player {player}: {action.value}\n", "metric")
+            self.out_body.insert("end", get_hand_advice(tier, analysis.board_texture, analysis.spr), "advice")
         else:
             self.out_head.insert("end", f"⚠ Select two hole cards\n{game_state}")
-            self.out_body.insert("end", "Press START when ready, then drag two cards to begin analysis.", "advice")
+            self.out_body.insert("end", "Press START when ready, then drag two cards to the 'Your Hand' slots to begin analysis.", "advice")
 
         # quick stats
         self.stats_text.insert("end", "SESSION STATS\n", "header")
         with open_db() as db:
             wins, total = db.execute(
-                "SELECT SUM(showdown_win), COUNT(showdown_win) "
-                "FROM decisions WHERE showdown_win IS NOT NULL"
+                "SELECT SUM(showdown_win), COUNT(showdown_win) FROM decisions WHERE showdown_win IS NOT NULL"
             ).fetchone()
-        if total:
-            self.stats_text.insert("end",
-                                   f"\nAccuracy: {wins/total:5.1%}\n({wins}/{total} hands)\n",
-                                   "metric")
-        else:
-            self.stats_text.insert("end", "\nNo results marked yet.\n", "metric")
-            
-        # Additional stats
+        self.stats_text.insert("end", f"\nMarked Hands Won: {wins or 0}/{total or 0}\n", "metric")
+        if total: self.stats_text.insert("end", f"Win Rate: {wins/total:7.1%}\n", "metric")
+
         with open_db() as db:
             recent = db.execute(
-                "SELECT decision, COUNT(*) FROM decisions "
-                "WHERE id > (SELECT MAX(id) - 20 FROM decisions) "
-                "GROUP BY decision"
+                "SELECT decision, COUNT(*) FROM decisions WHERE id > (SELECT MAX(id) - 20 FROM decisions) GROUP BY decision"
             ).fetchall()
-        
         if recent:
-            self.stats_text.insert("end", "\nRecent Decisions:\n", "header")
-            for dec, cnt in recent:
-                self.stats_text.insert("end", f"{dec}: {cnt}\n", "metric")
+            self.stats_text.insert("end", "\nRecent Decisions (20):\n", "header")
+            for dec, cnt in recent: self.stats_text.insert("end", f"{dec:<6}: {cnt}\n", "metric")
 
-        for w in (self.out_head, self.out_body, self.stats_text):
-            w.configure(state="disabled")
+        for w in (self.out_head, self.out_body, self.stats_text): w.configure(state="disabled")
 
     def _mark_showdown(self, won: int):
         if self._last_decision_id is None:
             messagebox.showinfo("No Decision", "Please analyze a hand first before marking the result.")
             return
         with open_db() as db:
-            db.execute("UPDATE decisions SET showdown_win=? WHERE id=?",
-                       (won, self._last_decision_id))
+            db.execute("UPDATE decisions SET showdown_win=? WHERE id=?", (won, self._last_decision_id))
+        log.info(f"Marked decision ID {self._last_decision_id} as {'WON' if won else 'LOST'}")
         self.refresh()
 
-    # ─────────────────────────────────────────────────────────────────────
     def clear_all(self):
         for s in self.hole + self.board:
-            if s.card:
-                s.clear()
-        # Reset game state
+            if s.card: s.clear()
         self.game_started = False
+        self.go_btn.configure(state="normal", text="START", bg=C_BTN_SUCCESS)
         self.go_btn._bg = C_BTN_SUCCESS
         self.go_btn._hover_bg = C_BTN_SUCCESS_HOVER
-        self.go_btn.configure(state="normal", text="START", bg=C_BTN_SUCCESS)
         self.action_btn.configure(state="disabled")
         self.current_pot = 0.0
         self.players_in_hand.clear()
@@ -1093,19 +942,20 @@ class PokerAssistant(tk.Tk):
         self.action_complete = False
         self.refresh()
 
-
 # ─────────────────────────────────────────────────────────────────────────────
 # 10.  Entrypoint
 # ─────────────────────────────────────────────────────────────────────────────
 def main():
     log.info("Starting Poker Assistant v9 (High Contrast Edition)")
+    # Ensure database is created on first run
+    with open_db() as db:
+        log.info(f"Database at '{DB_PATH.resolve()}' is ready.")
     app = PokerAssistant()
     app.mainloop()
-
 
 if __name__ == "__main__":
     try:
         main()
     except Exception:
-        log.exception("Fatal error")
+        log.exception("Fatal error in application")
         sys.exit(1)
