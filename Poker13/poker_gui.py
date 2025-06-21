@@ -37,7 +37,7 @@ C_BTN_PRIMARY_HOVER, C_BTN_SUCCESS_HOVER, C_BTN_DANGER_HOVER, C_BTN_WARNING_HOVE
 # ──────────────────────────────────────────────────────
 class StyledButton(tk.Button):
     def __init__(self, parent, text="", color=C_BTN_PRIMARY, hover_color=None, **kwargs):
-        default_fg = "black" if color in (C_BTN_PRIMARY, C_BTN_SUCCESS) else "white"
+        default_fg = "black"  # Always use black text for all buttons
         fg_color = kwargs.pop("fg", default_fg)
         defaults = {"font": ("Arial", 10, "bold"), "fg": fg_color, "bg": color,
                     "activebackground": hover_color or color, "activeforeground": fg_color,
