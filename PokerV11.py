@@ -1,3 +1,278 @@
+#!/usr/bin/env python3
+"""
+Poker Assistant v11 - Complete Fixed Version
+A comprehensive poker hand analysis tool with GUI
+"""
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. Standard Library Imports
+# ─────────────────────────────────────────────────────────────────────────────
+
+import tkinter as tk
+from tkinter import ttk, messagebox
+import weakref
+from typing import List, Dict, Tuple, Optional
+import logging
+import sqlite3
+from enum import Enum
+from dataclasses import dataclass
+import random
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. Logging Setup
+# ─────────────────────────────────────────────────────────────────────────────
+
+logging.basicConfig(level=logging.INFO)
+log = logging.getLogger(__name__)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. Core Poker Classes and Enums
+# ─────────────────────────────────────────────────────────────────────────────
+
+class Suit(Enum):
+    """Card suits with display properties"""
+    SPADE = "♠"
+    HEART = "♥"
+    DIAMOND = "♦"
+    CLUB = "♣"
+    
+    @property
+    def color(self):
+        return "red" if self in (Suit.HEART, Suit.DIAMOND) else "black"
+
+class Rank(Enum):
+    """Card ranks"""
+    TWO = "2"
+    THREE = "3"
+    FOUR = "4"
+    FIVE = "5"
+    SIX = "6"
+    SEVEN = "7"
+    EIGHT = "8"
+    NINE = "9"
+    TEN = "T"
+    JACK = "J"
+    QUEEN = "Q"
+    KING = "K"
+    ACE = "A"
+
+# Define RANKS for compatibility
+RANKS = [r.value for r in Rank]
+
+@dataclass
+class Card:
+    """Playing card with rank and suit"""
+    rank: str
+    suit: Suit
+    
+    def __str__(self):
+        return f"{self.rank}{self.suit.value}"
+
+class Position(Enum):
+    """Table positions"""
+    BTN = 9  # Button
+    SB = 1   # Small Blind
+    BB = 2   # Big Blind
+    UTG = 3  # Under the Gun
+    MP1 = 4  # Middle Position 1
+    MP2 = 5  # Middle Position 2
+    CO = 7   # Cutoff
+    HJ = 6   # Hijack
+    UTG1 = 8 # UTG+1
+
+class StackType(Enum):
+    """Stack size categories"""
+    SHORT = "Short (10-30BB)"
+    MEDIUM = "Medium (30-60BB)"
+    DEEP = "Deep (60-100BB)"
+    VERY_DEEP = "Very Deep (100+BB)"
+    
+    @property
+    def default_bb(self):
+        """Get default big blind amount for stack type"""
+        mapping = {
+            "Short (10-30BB)": 20,
+            "Medium (30-60BB)": 50,
+            "Deep (60-100BB)": 80,
+            "Very Deep (100+BB)": 150
+        }
+        return mapping.get(self.value, 50)
+
+class PlayerAction(Enum):
+    """Possible player actions"""
+    FOLD = "Fold"
+    CALL = "Call"
+    RAISE = "Raise"
+    CHECK = "Check"
+    ALL_IN = "All-in"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. Hand Analysis Data Structures
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class HandAnalysis:
+    """Results of hand analysis"""
+    decision: str
+    reason: str
+    equity: float
+    required_eq: float
+    ev_call: float
+    ev_raise: float
+    board_texture: str = "Unknown"
+    spr: float = 0.0
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. Core Poker Functions
+# ─────────────────────────────────────────────────────────────────────────────
+
+def hand_tier(hole_cards: List[Card]) -> str:
+    """Categorize hand strength into tiers"""
+    if len(hole_cards) != 2:
+        return "UNKNOWN"
+    
+    # Simplified hand tier logic
+    r1, r2 = hole_cards[0].rank, hole_cards[1].rank
+    suited = hole_cards[0].suit == hole_cards[1].suit
+    
+    # Premium hands
+    premium = {"A", "K", "Q"}
+    if r1 in premium and r2 in premium:
+        return "PREMIUM"
+    
+    # Strong hands
+    strong = {"A", "K", "Q", "J", "T"}
+    if r1 in strong and r2 in strong:
+        return "STRONG"
+    
+    # Pairs
+    if r1 == r2:
+        if r1 in {"A", "K", "Q", "J"}:
+            return "PREMIUM"
+        elif r1 in {"T", "9", "8", "7"}:
+            return "STRONG"
+        else:
+            return "MEDIUM"
+    
+    # Suited connectors
+    if suited and abs(RANKS.index(r1) - RANKS.index(r2)) == 1:
+        return "PLAYABLE"
+    
+    # Default
+    return "MARGINAL" if suited else "WEAK"
+
+def analyse_hand(hole_cards: List[Card], board: List[Card], position: Position, 
+                stack_bb: int, pot: float, to_call: float) -> HandAnalysis:
+    """Analyze hand and provide decision recommendation"""
+    # Simplified analysis logic
+    tier = hand_tier(hole_cards)
+    pot_odds = to_call / (pot + to_call) if pot + to_call > 0 else 0
+    
+    # Simple equity estimation based on tier
+    equity_map = {
+        "PREMIUM": 0.75,
+        "STRONG": 0.65,
+        "MEDIUM": 0.55,
+        "PLAYABLE": 0.45,
+        "MARGINAL": 0.35,
+        "WEAK": 0.25,
+        "UNKNOWN": 0.50
+    }
+    
+    equity = equity_map.get(tier, 0.5)
+    
+    # Adjust for position
+    if position in [Position.BTN, Position.CO]:
+        equity += 0.05
+    elif position in [Position.SB, Position.BB]:
+        equity -= 0.05
+    
+    # Make decision
+    if equity > pot_odds + 0.1:
+        decision = "RAISE"
+        reason = f"Strong hand ({tier}) with good equity"
+    elif equity > pot_odds:
+        decision = "CALL"
+        reason = f"Positive expected value with {tier} hand"
+    else:
+        decision = "FOLD"
+        reason = f"Insufficient equity with {tier} hand"
+    
+    # Calculate EVs
+    ev_call = (equity * (pot + to_call)) - to_call
+    ev_raise = (equity * (pot + to_call * 2.5)) - (to_call * 2.5)
+    
+    return HandAnalysis(
+        decision=decision,
+        reason=reason,
+        equity=equity,
+        required_eq=pot_odds,
+        ev_call=ev_call,
+        ev_raise=ev_raise,
+        board_texture="Mixed",
+        spr=stack_bb / (pot / 2) if pot > 0 else 10
+    )
+
+def to_two_card_str(cards: List[Card]) -> str:
+    """Convert two cards to string representation"""
+    if len(cards) != 2:
+        return "??"
+    return f"{cards[0]}{cards[1]}"
+
+def get_position_advice(position: Position) -> str:
+    """Get position-specific advice"""
+    advice_map = {
+        Position.BTN: "You have position advantage. Be aggressive with a wide range.",
+        Position.CO: "Good position. Open with strong hands and some speculative hands.",
+        Position.SB: "Poor position. Play tight and be careful post-flop.",
+        Position.BB: "You'll be out of position. Defend selectively.",
+        Position.UTG: "Early position. Play only premium hands.",
+    }
+    return advice_map.get(position, "Play according to your position.")
+
+def get_hand_advice(tier: str, board_texture: str, spr: float) -> str:
+    """Get hand-specific advice"""
+    if tier in ["PREMIUM", "STRONG"]:
+        return "Strong hand. Consider raising for value. Protect your hand on wet boards."
+    elif tier in ["MEDIUM", "PLAYABLE"]:
+        return "Decent hand. Play cautiously and consider pot control."
+    else:
+        return "Weak hand. Look for good spots to bluff or fold if facing aggression."
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. Database Functions
+# ─────────────────────────────────────────────────────────────────────────────
+
+def open_db():
+    """Open database connection and ensure tables exist"""
+    conn = sqlite3.connect("poker_decisions.db")
+    conn.execute("""
+        CREATE TABLE IF NOT EXISTS decisions (
+            id INTEGER PRIMARY KEY,
+            timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+            position TEXT,
+            hand_tier TEXT,
+            stack_bb INTEGER,
+            pot REAL,
+            to_call REAL,
+            board TEXT,
+            decision TEXT,
+            showdown_win INTEGER
+        )
+    """)
+    conn.commit()
+    return conn
+
+def record_decision(analysis: HandAnalysis, position: Position, tier: str,
+                   stack_bb: int, pot: float, to_call: float, board: str) -> int:
+    """Record decision in database"""
+    with open_db() as db:
+        cursor = db.execute("""
+            INSERT INTO decisions (position, hand_tier, stack_bb, pot, to_call, board, decision)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+        """, (position.name, tier, stack_bb, pot, to_call, board, analysis.decision))
+        return cursor.lastrowid
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 7.  Custom Dialogs and Reusable Button Class (IMPROVED)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -51,7 +326,110 @@ class StyledButton(tk.Button):
         self.bind("<Leave>", lambda e: self.config(bg=self._bg))
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 8.  GUI widgets (IMPROVED)
+# 8.  Player Action Dialog
+# ─────────────────────────────────────────────────────────────────────────────
+
+class PlayerActionDialog(tk.Toplevel):
+    """Dialog for recording player actions"""
+    def __init__(self, parent, player_num: int, current_pot: float):
+        super().__init__(parent)
+        self.title(f"Player {player_num} Action")
+        self.geometry("400x300")
+        self.configure(bg=C_PANEL)
+        self.result = None
+        
+        # Make dialog modal
+        self.transient(parent)
+        self.grab_set()
+        
+        # Header
+        tk.Label(
+            self,
+            text=f"What did Player {player_num} do?",
+            font=("Arial", 14, "bold"),
+            bg=C_PANEL,
+            fg=C_TEXT
+        ).pack(pady=20)
+        
+        # Action buttons
+        action_frame = tk.Frame(self, bg=C_PANEL)
+        action_frame.pack(pady=10)
+        
+        StyledButton(
+            action_frame,
+            text="FOLD",
+            color=C_BTN_DANGER,
+            hover_color=C_BTN_DANGER_HOVER,
+            command=lambda: self._set_result(PlayerAction.FOLD, 0)
+        ).pack(pady=5, padx=20, fill="x")
+        
+        StyledButton(
+            action_frame,
+            text="CALL",
+            color=C_BTN_SUCCESS,
+            hover_color=C_BTN_SUCCESS_HOVER,
+            command=lambda: self._set_result(PlayerAction.CALL, 0)
+        ).pack(pady=5, padx=20, fill="x")
+        
+        StyledButton(
+            action_frame,
+            text="RAISE",
+            color=C_BTN_WARNING,
+            hover_color=C_BTN_WARNING_HOVER,
+            command=self._show_raise_input
+        ).pack(pady=5, padx=20, fill="x")
+        
+        # Raise amount input (hidden initially)
+        self.raise_frame = tk.Frame(self, bg=C_PANEL)
+        tk.Label(
+            self.raise_frame,
+            text="Raise amount:",
+            bg=C_PANEL,
+            fg=C_TEXT
+        ).pack(side="left", padx=5)
+        
+        self.raise_var = tk.DoubleVar(value=current_pot)
+        self.raise_entry = tk.Entry(
+            self.raise_frame,
+            textvariable=self.raise_var,
+            width=10,
+            bg=C_BTN_DARK,
+            fg="white",
+            insertbackground="white"
+        )
+        self.raise_entry.pack(side="left", padx=5)
+        
+        StyledButton(
+            self.raise_frame,
+            text="Confirm",
+            color=C_BTN_PRIMARY,
+            command=self._confirm_raise
+        ).pack(side="left", padx=5)
+        
+        # Center dialog
+        self.update_idletasks()
+        x = (self.winfo_screenwidth() - self.winfo_width()) // 2
+        y = (self.winfo_screenheight() - self.winfo_height()) // 2
+        self.geometry(f"+{x}+{y}")
+    
+    def _set_result(self, action: PlayerAction, amount: float):
+        self.result = (action, amount)
+        self.destroy()
+    
+    def _show_raise_input(self):
+        self.raise_frame.pack(pady=10)
+        self.raise_entry.focus_set()
+        self.raise_entry.select_range(0, tk.END)
+    
+    def _confirm_raise(self):
+        try:
+            amount = float(self.raise_var.get())
+            self._set_result(PlayerAction.RAISE, amount)
+        except ValueError:
+            messagebox.showerror("Invalid Input", "Please enter a valid number")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 9.  GUI widgets (IMPROVED)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class DraggableCard(tk.Label):
@@ -119,7 +497,7 @@ class CardSlot(tk.Frame):
             font=("Arial", 9)
         )
         self._label.pack(expand=True)
-        self.card: Card | None = None
+        self.card: Optional[Card] = None
         self._app = weakref.proxy(app)
         
     def accept(self, widget: DraggableCard):
@@ -166,7 +544,7 @@ class CardSlot(tk.Frame):
         self._app.refresh()
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 9.  Main Tk window (IMPROVED LAYOUT)
+# 10.  Main Tk window (IMPROVED LAYOUT)
 # ─────────────────────────────────────────────────────────────────────────────
 
 class PokerAssistant(tk.Tk):
@@ -192,12 +570,12 @@ class PokerAssistant(tk.Tk):
         self.game_started = False
         self.current_pot = 0.0
         self.players_in_hand: List[int] = []
-        self.player_actions: Dict[int, tuple[PlayerAction, float]] = {}
+        self.player_actions: Dict[int, Tuple[PlayerAction, float]] = {}
         self.action_complete = False
         
-        self.grid_cards: dict[str, DraggableCard] = {}
+        self.grid_cards: Dict[str, DraggableCard] = {}
         self.used: set[str] = set()
-        self._last_decision_id: int | None = None
+        self._last_decision_id: Optional[int] = None
         
         self._build_gui()
         
@@ -807,4 +1185,10 @@ class PokerAssistant(tk.Tk):
                 return
         messagebox.showinfo("No slot", "All card slots are full.")
 
-# Keep all other classes unchanged
+# ─────────────────────────────────────────────────────────────────────────────
+# 11. Main Entry Point
+# ─────────────────────────────────────────────────────────────────────────────
+
+if __name__ == "__main__":
+    app = PokerAssistant()
+    app.mainloop()
