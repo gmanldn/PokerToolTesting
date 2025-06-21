@@ -1,35 +1,4 @@
-I'll help you debug this poker assistant application. Looking at the code, I can see several potential issues. Let me analyze and provide fixes:
-
-Main Issues Found:
-
-Duplicate setup_gui() call - The setup_gui() method is called twice in __init__, which could cause widget duplication issues.
-
-
-Infinite recursion potential in schedule_refresh() - The method calls itself recursively without proper termination conditions.
-
-
-Missing error handling in various callback methods.
-
-
-Potential race conditions with the auto-refresh mechanism.
-
-
-Here's the debugged version with fixes:
-
-python
-
 from __future__ import annotations
-"""PokerTool5 – Enhanced with visual card selection and drag-drop interface
---------------------------------------------------------------------------------------
-Features:
-- Visual card grid for selection
-- Drag and drop card placement
-- Large, scalable card icons
-- Visual slots for hole cards and community cards
-- Graphical table representation
-- Advanced metrics and strategy recommendations
-"""
-
 import logging
 import random
 import math
@@ -159,6 +128,13 @@ HAND_BULLY_FACTORS = {
     'weak': 0.45,
     'speculative': 0.6,
     'trash': 0.3
+}
+
+# Chip stack definitions
+CHIP_STACKS = {
+    'Low': 40,
+    'Medium': 100,
+    'High': 200
 }
 
 # Opponent types
@@ -516,10 +492,10 @@ class TableVisualization(tk.Frame):
     def __init__(self, parent, on_update=None):
         super().__init__(parent)
         self.on_update = on_update
-        self.card_size = 60
+        self.card_size = 50  # Smaller card size for table
         
-        # Main canvas for table
-        self.canvas = tk.Canvas(self, width=700, height=400, bg='darkgreen')
+        # Main canvas for table (smaller)
+        self.canvas = tk.Canvas(self, width=600, height=350, bg='darkgreen')
         self.canvas.pack(padx=5, pady=5)
         
         # Card slots
@@ -530,31 +506,31 @@ class TableVisualization(tk.Frame):
         
     def setup_table(self):
         """Setup the poker table with card slots"""
-        # Draw table
-        self.canvas.create_oval(150, 100, 550, 300, fill='darkgreen', outline='brown', width=5)
+        # Draw table (smaller)
+        self.canvas.create_oval(150, 80, 450, 250, fill='darkgreen', outline='brown', width=4)
         
         # Draw positions (visual layout matches position numbers)
         positions = [
-            (350, 110, "BTN"),   # Position 1
-            (270, 130, "SB"),    # Position 2
-            (230, 200, "BB"),    # Position 3
-            (270, 270, "UTG"),   # Position 4
-            (350, 290, "MP"),    # Position 5
-            (430, 270, "CO"),    # Position 6
+            (300, 90, "BTN"),    # Position 1
+            (240, 110, "SB"),    # Position 2
+            (200, 165, "BB"),    # Position 3
+            (240, 220, "UTG"),   # Position 4
+            (300, 240, "MP"),    # Position 5
+            (360, 220, "CO"),    # Position 6
         ]
         
         for x, y, pos in positions:
-            self.canvas.create_oval(x-20, y-20, x+20, y+20, fill='lightblue', outline='black', tag=f"pos_{pos}")
-            self.canvas.create_text(x, y-30, text=pos, font=('Arial', 8, 'bold'))
+            self.canvas.create_oval(x-15, y-15, x+15, y+15, fill='lightblue', outline='black', tag=f"pos_{pos}")
+            self.canvas.create_text(x, y-25, text=pos, font=('Arial', 8, 'bold'))
             
         # Highlight BTN by default
         self.highlight_position(1)
         
         # Create hole card slots
         hole_frame = tk.Frame(self.canvas, bg='darkgreen')
-        self.canvas.create_window(350, 350, window=hole_frame)
+        self.canvas.create_window(300, 300, window=hole_frame)
         
-        self.canvas.create_text(350, 320, text="Your Hole Cards", fill='white', font=('Arial', 12, 'bold'))
+        self.canvas.create_text(300, 275, text="Your Hole Cards", fill='white', font=('Arial', 10, 'bold'))
         
         for i in range(2):
             slot = CardSlot(hole_frame, f"Hole {i+1}", self.card_size, self.on_update)
@@ -563,9 +539,9 @@ class TableVisualization(tk.Frame):
         
         # Create community card slots
         community_frame = tk.Frame(self.canvas, bg='darkgreen')
-        self.canvas.create_window(350, 200, window=community_frame)
+        self.canvas.create_window(300, 165, window=community_frame)
         
-        self.canvas.create_text(350, 160, text="Community Cards", fill='white', font=('Arial', 12, 'bold'))
+        self.canvas.create_text(300, 135, text="Community Cards", fill='white', font=('Arial', 10, 'bold'))
         
         for i in range(5):
             slot = CardSlot(community_frame, ["Flop 1", "Flop 2", "Flop 3", "Turn", "River"][i], 
@@ -612,9 +588,9 @@ class TableVisualization(tk.Frame):
                 self.canvas.itemconfig(items[0], fill='yellow')
 
 class CardSelectionGrid(tk.Frame):
-    """Grid showing all 52 cards for selection"""
+    """Grid showing all 52 cards for selection in two rows per suit"""
     
-    def __init__(self, parent, card_size: int = 60, app=None):
+    def __init__(self, parent, card_size: int = 40, app=None):
         super().__init__(parent)
         self.card_size = card_size
         self.card_widgets = {}
@@ -624,23 +600,35 @@ class CardSelectionGrid(tk.Frame):
         self.setup_grid()
         
     def setup_grid(self):
-        """Create the card selection grid"""
+        """Create the card selection grid with two rows per suit"""
         # Create a frame for each suit
         for suit_idx, suit in enumerate(SUITS):
+            suit_name = ['Spades', 'Hearts', 'Diamonds', 'Clubs'][suit_idx]
             suit_frame = tk.LabelFrame(
                 self,
-                text=f"{suit} {['Spades', 'Hearts', 'Diamonds', 'Clubs'][suit_idx]}",
-                font=('Arial', 10, 'bold'),
+                text=f"{suit} {suit_name}",
+                font=('Arial', 9, 'bold'),
                 fg=SUIT_COLORS[suit],
                 padx=2,
                 pady=2
             )
-            suit_frame.grid(row=suit_idx, column=0, sticky='ew', padx=2, pady=2)
+            suit_frame.grid(row=suit_idx * 2, column=0, rowspan=2, sticky='ew', padx=2, pady=2)
             
-            # Create cards for this suit
+            # Create two rows for this suit
+            row1_frame = tk.Frame(suit_frame)
+            row1_frame.pack(fill='x')
+            row2_frame = tk.Frame(suit_frame)
+            row2_frame.pack(fill='x')
+            
+            # Split ranks into two rows (7 and 6 cards)
             for rank_idx, rank in enumerate(RANKS):
                 card = Card(rank, suit)
-                card_widget = DraggableCard(suit_frame, card, self.card_size, self.app)
+                card_widget = DraggableCard(
+                    row1_frame if rank_idx < 7 else row2_frame, 
+                    card, 
+                    self.card_size, 
+                    self.app
+                )
                 card_widget.pack(side='left', padx=1, pady=1)
                 
                 # Store reference
@@ -664,7 +652,7 @@ class PokerAssistant:
     def __init__(self, root):
         self.root = root
         self.root.title("PokerTool5 - Visual Poker Assistant")
-        self.root.geometry("1300x800")
+        self.root.geometry("1400x850")
         
         # Initialize database
         self.db = PokerDatabase()
@@ -738,16 +726,16 @@ class PokerAssistant:
         main_container = tk.Frame(self.root)
         main_container.pack(fill='both', expand=True, padx=5, pady=5)
         
-        # Left side - Card selection (narrower, pushed left)
-        left_frame = tk.Frame(main_container, width=250)
+        # Left side - Card selection (optimized width)
+        left_frame = tk.Frame(main_container, width=380)
         left_frame.pack(side='left', fill='y', padx=(0, 10))
         left_frame.pack_propagate(False)
         
         # Card selection label
-        tk.Label(left_frame, text="Card Selection", font=('Arial', 14, 'bold')).pack(pady=(5, 2))
+        tk.Label(left_frame, text="Card Selection", font=('Arial', 12, 'bold')).pack(pady=(5, 2))
         
-        # Card grid with minimal padding
-        self.card_grid = CardSelectionGrid(left_frame, card_size=45, app=self)
+        # Card grid with two rows per suit
+        self.card_grid = CardSelectionGrid(left_frame, card_size=40, app=self)
         self.card_grid.pack(padx=2, pady=2)
         
         # Right side - Table and analysis (takes remaining space)
@@ -784,6 +772,15 @@ class PokerAssistant:
         pot_entry.bind('<Return>', lambda e: self.analyze_hand_silent())
         pot_entry.bind('<FocusOut>', lambda e: self.analyze_hand_silent())
         
+        # Chip Stack combo box
+        ttk.Label(row1_frame, text="Stack:").pack(side='left', padx=5)
+        self.chip_stack_var = tk.StringVar(value="Medium")
+        chip_combo = ttk.Combobox(row1_frame, textvariable=self.chip_stack_var, width=10)
+        chip_combo['values'] = list(CHIP_STACKS.keys())
+        chip_combo.current(1)  # Default to Medium
+        chip_combo.pack(side='left', padx=5)
+        chip_combo.bind('<<ComboboxSelected>>', self.on_chip_stack_change)
+        
         row2_frame = tk.Frame(controls_frame)
         row2_frame.pack(fill='x', padx=5, pady=5)
         
@@ -796,10 +793,8 @@ class PokerAssistant:
         
         ttk.Label(row2_frame, text="Stack Size:").pack(side='left', padx=5)
         self.stack_size_var = tk.DoubleVar(value=100.0)
-        stack_entry = ttk.Entry(row2_frame, textvariable=self.stack_size_var, width=10)
-        stack_entry.pack(side='left', padx=5)
-        stack_entry.bind('<Return>', lambda e: self.analyze_hand_silent())
-        stack_entry.bind('<FocusOut>', lambda e: self.analyze_hand_silent())
+        self.stack_size_label = ttk.Label(row2_frame, text=f"{self.stack_size_var.get():.0f} BB")
+        self.stack_size_label.pack(side='left', padx=5)
         
         # Action buttons
         button_frame = tk.Frame(controls_frame)
@@ -825,6 +820,18 @@ class PokerAssistant:
         
         # Initial message
         self.results_text.insert(1.0, "Click on cards to place them in slots.\nAnalysis will update automatically.\n\nBTN (Button) is position 1 - the best position.")
+    
+    def on_chip_stack_change(self, event=None):
+        """Handle chip stack selection change"""
+        stack_type = self.chip_stack_var.get()
+        stack_size = CHIP_STACKS.get(stack_type, 100)
+        self.stack_size_var.set(stack_size)
+        self.stack_size_label.config(text=f"{stack_size:.0f} BB")
+        self.stack_size = stack_size
+        
+        # Trigger analysis update
+        if self.auto_refresh_var.get():
+            self.analyze_hand_silent()
     
     def on_position_change(self, event=None):
         """Handle position change"""
@@ -979,6 +986,7 @@ class PokerAssistant:
         analysis_lines.append(f"Hand: {hand_str}")
         analysis_lines.append(f"Hand Tier: {tier.title()}")
         analysis_lines.append(f"Position: {POSITION_NAMES.get(position, 'Unknown')} ({position})")
+        analysis_lines.append(f"Stack: {self.chip_stack_var.get()} ({self.stack_size_var.get():.0f} BB)")
         
         if community_cards:
             community_str = "".join(str(c) for c in community_cards)
@@ -1015,6 +1023,13 @@ class PokerAssistant:
         """Generate strategy recommendation"""
         
         recommendations = []
+        
+        # Stack size considerations
+        stack_type = self.chip_stack_var.get()
+        if stack_type == "Low":
+            recommendations.append("SHORT STACK: Push/fold strategy, look for spots to shove")
+        elif stack_type == "High":
+            recommendations.append("DEEP STACK: More postflop play, implied odds matter")
         
         # Pre-flop recommendations
         if metrics.hand_equity > 0.8:
