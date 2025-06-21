@@ -29,10 +29,12 @@ class Rank(Enum):
     def val(self) -> str:
         return "23456789TJQKA"[self.value]
 
+# --- FIX: Re-ordered definitions ---
+# Define constants that depend on Rank first.
 RANKS_MAP = {r.val: r for r in Rank}
 RANK_ORDER = [r.val for r in Rank]
-FULL_DECK = [Card(r.val, s) for s in Suit for r in Rank]
 
+# Now define Card, which depends on Suit, Rank, and RANK_ORDER.
 @dataclass(frozen=True, order=True)
 class Card:
     rank: str
@@ -44,6 +46,10 @@ class Card:
 
     def __str__(self) -> str:
         return f"{self.rank}{self.suit.value}"
+
+# Finally, define FULL_DECK which depends on the Card class.
+FULL_DECK = [Card(r.val, s) for s in Suit for r in Rank]
+# --- END FIX ---
 
 class Position(Enum):
     SB    = 1
@@ -92,7 +98,7 @@ class HandAnalysis:
     spr: float
 
 # ──────────────────────────────────────────────────────
-#  Hand Evaluation Logic (New)
+#  Hand Evaluation Logic
 # ──────────────────────────────────────────────────────
 class HandRank(Enum):
     HIGH_CARD, PAIR, TWO_PAIR, THREE_OF_A_KIND, STRAIGHT, FLUSH, FULL_HOUSE, FOUR_OF_A_KIND, STRAIGHT_FLUSH = range(9)
@@ -180,7 +186,7 @@ def check_straight(ranks: List[int]) -> Tuple[bool, int]:
     return (False, -1)
 
 # ──────────────────────────────────────────────────────
-#  Equity and Analysis Logic (Rewritten)
+#  Equity and Analysis Logic
 # ──────────────────────────────────────────────────────
 HAND_TIERS = {
     "PREMIUM": {"AA", "KK", "QQ", "JJ", "AKs"},
@@ -196,10 +202,11 @@ def get_hand_tier(hole_cards: List[Card]) -> str:
     c1, c2 = sorted(hole_cards, key=lambda c: c.rank_val, reverse=True)
     suited = "s" if c1.suit == c2.suit else "o"
     if c1.rank == c2.rank: suited = ""
-    hand_str = f"{c1.rank}{c2.rank}{suited}"
+    hand_str_generic = f"{c1.rank}{c2.rank}{suited}"
+    hand_str_offsuit = f"{c2.rank}{c1.rank}o"
     
     for tier, hands in HAND_TIERS.items():
-        if hand_str in hands:
+        if hand_str_generic in hands or (suited == "o" and hand_str_offsuit in hands):
             return tier
     return "WEAK"
 
@@ -226,31 +233,39 @@ def calculate_equity_monte_carlo(
     opp_range_str = get_opponent_range(opponent_range_tier)
     
     for hand_str in opp_range_str:
-        r1, r2 = RANKS_MAP[hand_str[0]], RANKS_MAP[hand_str[1]]
+        r1_val, r2_val = hand_str[0], hand_str[1]
+        
+        # Check if the cards for this hand combo are even in the deck
+        possible_in_deck = sum(1 for c in deck if c.rank == r1_val) >= (2 if r1_val == r2_val else 1) and \
+                           sum(1 for c in deck if c.rank == r2_val) >= 1
+        if not possible_in_deck:
+            continue
+
         if len(hand_str) == 3: # Suited
             for s in Suit:
-                c1, c2 = Card(r1.val, s), Card(r2.val, s)
-                if c1 not in known_cards and c2 not in known_cards:
+                c1, c2 = Card(r1_val, s), Card(r2_val, s)
+                if c1 in deck and c2 in deck:
                     opponent_range_cards.append([c1, c2])
         else: # Pair or off-suit
-            suits = list(Suit)
-            for i in range(4):
-                for j in range(i + 1, 4):
-                    s1, s2 = suits[i], suits[j]
-                    c1 = Card(r1.val, s1)
-                    c2 = Card(r2.val, s2)
-                    if hand_str[0] == hand_str[1]: # Pair
-                        if c1 not in known_cards and c2 not in known_cards: opponent_range_cards.append([c1, c2])
-                    else: # Offsuit
-                        if c1 not in known_cards and c2 not in known_cards: opponent_range_cards.append([c1, c2])
-                        if Card(r1.val, s2) not in known_cards and Card(r2.val, s1) not in known_cards: opponent_range_cards.append([Card(r1.val, s2), Card(r2.val, s1)])
+            all_r1s = [c for c in deck if c.rank == r1_val]
+            all_r2s = [c for c in deck if c.rank == r2_val]
+            if r1_val == r2_val: # Pair
+                for i in range(len(all_r1s)):
+                    for j in range(i + 1, len(all_r1s)):
+                        opponent_range_cards.append([all_r1s[i], all_r1s[j]])
+            else: # Offsuit
+                for c1 in all_r1s:
+                    for c2 in all_r2s:
+                        if c1.suit != c2.suit:
+                           opponent_range_cards.append([c1,c2])
+
 
     if not opponent_range_cards: return 0.5 # fallback
 
     wins = 0
     ties = 0
 
-    for _ in range(num_simulations):
+    for _ in range(num_simulations // num_opponents if num_opponents > 0 else num_simulations):
         random.shuffle(deck)
         sim_deck = list(deck)
         
@@ -262,23 +277,27 @@ def calculate_equity_monte_carlo(
         dealt_cards = set()
         for _ in range(num_opponents):
             hand_found = False
-            for hand in possible_opp_hands:
-                if hand[0] not in dealt_cards and hand[1] not in dealt_cards and hand[0] in sim_deck and hand[1] in sim_deck:
-                    opp_hands.append(hand)
-                    dealt_cards.add(hand[0])
-                    dealt_cards.add(hand[1])
-                    hand_found = True
-                    break
+            # Try to find a hand from the range that doesn't conflict with cards already dealt to other opponents
+            for hand_candidate in possible_opp_hands:
+                if hand_candidate[0] not in dealt_cards and hand_candidate[1] not in dealt_cards:
+                    # Check if these cards are still available in the *current* simulation deck
+                    try:
+                        sim_deck.remove(hand_candidate[0])
+                        sim_deck.remove(hand_candidate[1])
+                        opp_hands.append(hand_candidate)
+                        dealt_cards.update(hand_candidate)
+                        hand_found = True
+                        break
+                    except ValueError: # Card already used for board, etc.
+                        continue
             if not hand_found: # Could not find a hand from the range, deal random
                 if len(sim_deck) > 2:
                     hand = [sim_deck.pop(), sim_deck.pop()]
                     opp_hands.append(hand)
-                    dealt_cards.update(hand)
 
         # Draw board
-        final_deck = [c for c in sim_deck if c not in dealt_cards]
         needed = 5 - len(board)
-        sim_board = board + final_deck[:needed]
+        sim_board = board + sim_deck[:needed]
 
         my_rank = get_hand_rank(hole, sim_board)
         best_opp_rank = (HandRank.HIGH_CARD, [-1])
@@ -293,7 +312,9 @@ def calculate_equity_monte_carlo(
         elif my_rank == best_opp_rank:
             ties += 1
 
-    return (wins + ties / (num_opponents + 1)) / num_simulations
+    total_sims = (num_simulations // num_opponents if num_opponents > 0 else num_simulations)
+    if total_sims == 0: return 0.0
+    return (wins + ties / 2) / total_sims
 
 def get_board_texture(board: List[Card]) -> str:
     if not board: return "Pre-flop"
@@ -310,10 +331,11 @@ def get_board_texture(board: List[Card]) -> str:
     
     unique_ranks = sorted(list(set(ranks)))
     is_connected = False
-    for i in range(len(unique_ranks) - 2):
-        if unique_ranks[i+2] - unique_ranks[i] <= 4:
-            is_connected = True
-            break
+    if len(unique_ranks) >= 3:
+      for i in range(len(unique_ranks) - 2):
+          if unique_ranks[i+2] - unique_ranks[i] <= 4:
+              is_connected = True
+              break
     if is_connected: textures.append("Connected")
         
     if not textures: return "Dry/Raggedy"
@@ -325,9 +347,11 @@ def analyse_hand(hole: List[Card], board: List[Card], position: Position,
     
     tier = get_hand_tier(hole)
     pot_odds = to_call / (pot + to_call) if pot + to_call else 0
-    spr = (stack_bb * 2) / pot if pot > 0 else 100 # Assuming BB is 1 unit for SPR calc
+    # Effective stack is what's in your stack or the pot, whichever is smaller, for SPR calc. A simplification:
+    effective_stack = stack_bb * (pot / (1.5 if not board else pot) ) # Approximate BB value
+    spr = effective_stack / pot if pot > 0 else 100
 
-    equity = calculate_equity_monte_carlo(hole, board, num_players - 1)
+    equity = calculate_equity_monte_carlo(hole, board, num_players - 1 if num_players > 0 else 0)
     board_texture = get_board_texture(board)
 
     # Adjust decision making based on equity edge and SPR
@@ -335,7 +359,7 @@ def analyse_hand(hole: List[Card], board: List[Card], position: Position,
 
     if equity_edge > 0.10 or (equity_edge > 0.05 and spr < 4):
         decision, reason = "RAISE", f"Strong equity edge ({equity_edge:+.1%}) and favorable SPR ({spr:.1f})."
-    elif equity_edge > 0:
+    elif equity_edge >= 0:
         decision, reason = "CALL", f"Positive EV call based on pot odds vs equity ({equity:.1%})."
     else:
         decision, reason = "FOLD", f"Insufficient equity ({equity:.1%}) to meet pot odds ({pot_odds:.1%})."
@@ -354,7 +378,8 @@ def analyse_hand(hole: List[Card], board: List[Card], position: Position,
     return HandAnalysis(decision, reason, equity, pot_odds, ev_call, ev_raise, board_texture, spr)
 
 def to_two_card_str(cards: List[Card]) -> str:
-    return f"{cards[0]}{cards[1]}" if len(cards) == 2 else "??"
+    return f"{cards[0].rank}{cards[0].suit.value}{cards[1].rank}{cards[1].suit.value}" if len(cards) == 2 else "??"
+
 
 def get_position_advice(pos: Position) -> str:
     advice = {
