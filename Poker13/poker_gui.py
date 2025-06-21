@@ -295,8 +295,244 @@ class PokerAssistant(tk.Tk):
                      command=self.table_viz.rotate_clockwise,
                      width=3, padx=5, pady=3).pack(side="left", padx=5)
 
-    # -------------------- (all original builder methods stay the same) -----
-    #  … existing _build_table_area, _build_control_panel, etc. …
+    # -------------------- Builder methods for the right panel -----
+    def _build_table_area(self, parent):
+        """Build the table configuration area."""
+        tf = tk.LabelFrame(parent, text=" TABLE SETUP ", bg=C_BG, fg=C_TEXT,
+                          font=self.FONT_SUBHEADER, bd=1, relief="groove")
+        tf.pack(fill="x", pady=(0, 10))
+        
+        # Table settings
+        settings = tk.Frame(tf, bg=C_BG)
+        settings.pack(fill="x", padx=10, pady=10)
+        
+        # Position
+        pos_frame = tk.Frame(settings, bg=C_BG)
+        pos_frame.pack(side="left", fill="y", padx=(0, 15))
+        tk.Label(pos_frame, text="Position", bg=C_BG, fg=C_TEXT).pack(anchor="w")
+        pos_menu = ttk.Combobox(pos_frame, textvariable=self.position, width=6,
+                               values=[p.name for p in Position])
+        pos_menu.pack(pady=5)
+        
+        # Stack size
+        stack_frame = tk.Frame(settings, bg=C_BG)
+        stack_frame.pack(side="left", fill="y", padx=(0, 15))
+        tk.Label(stack_frame, text="Stack", bg=C_BG, fg=C_TEXT).pack(anchor="w")
+        stack_menu = ttk.Combobox(stack_frame, textvariable=self.stack_type, width=15,
+                                 values=[s.value for s in StackType])
+        stack_menu.pack(pady=5)
+        
+        # Blinds
+        blinds_frame = tk.Frame(settings, bg=C_BG)
+        blinds_frame.pack(side="left", fill="y")
+        tk.Label(blinds_frame, text="Blinds", bg=C_BG, fg=C_TEXT).pack(anchor="w")
+        blinds_inner = tk.Frame(blinds_frame, bg=C_BG)
+        blinds_inner.pack(pady=5)
+        tk.Label(blinds_inner, text="SB:", bg=C_BG, fg=C_TEXT).pack(side="left")
+        sb_entry = tk.Entry(blinds_inner, textvariable=self.small_blind, width=4, **self.STYLE_ENTRY)
+        sb_entry.pack(side="left", padx=(5, 10))
+        tk.Label(blinds_inner, text="BB:", bg=C_BG, fg=C_TEXT).pack(side="left")
+        bb_entry = tk.Entry(blinds_inner, textvariable=self.big_blind, width=4, **self.STYLE_ENTRY)
+        bb_entry.pack(side="left", padx=5)
+        
+        # Players
+        players_frame = tk.Frame(settings, bg=C_BG)
+        players_frame.pack(side="left", fill="y", padx=(15, 0))
+        tk.Label(players_frame, text="Players", bg=C_BG, fg=C_TEXT).pack(anchor="w")
+        players_inner = tk.Frame(players_frame, bg=C_BG)
+        players_inner.pack(pady=5)
+        players_scale = tk.Scale(players_inner, from_=2, to=9, orient="horizontal",
+                               variable=self.num_players, bg=C_BG, fg=C_TEXT,
+                               highlightthickness=0, bd=0, length=100)
+        players_scale.pack(side="left")
+        
+    def _build_control_panel(self, parent):
+        """Build the game control panel."""
+        cf = tk.LabelFrame(parent, text=" GAME CONTROLS ", bg=C_BG, fg=C_TEXT,
+                          font=self.FONT_SUBHEADER, bd=1, relief="groove")
+        cf.pack(fill="x", pady=(0, 10))
+        
+        # Card slots
+        slots = tk.Frame(cf, bg=C_BG)
+        slots.pack(fill="x", padx=10, pady=10)
+        
+        # Hole cards
+        hole_frame = tk.Frame(slots, bg=C_BG)
+        hole_frame.pack(side="left", padx=(0, 20))
+        tk.Label(hole_frame, text="YOUR HAND", bg=C_BG, fg=C_TEXT).pack(anchor="w")
+        hole_slots = tk.Frame(hole_frame, bg=C_BG)
+        hole_slots.pack(pady=5)
+        self.hole = [CardSlot(hole_slots, "Card 1", self), CardSlot(hole_slots, "Card 2", self)]
+        for slot in self.hole:
+            slot.pack(side="left", padx=5)
+        
+        # Board cards
+        board_frame = tk.Frame(slots, bg=C_BG)
+        board_frame.pack(side="left")
+        tk.Label(board_frame, text="BOARD", bg=C_BG, fg=C_TEXT).pack(anchor="w")
+        board_slots = tk.Frame(board_frame, bg=C_BG)
+        board_slots.pack(pady=5)
+        self.board = [CardSlot(board_slots, f"Card {i+1}", self) for i in range(5)]
+        for slot in self.board:
+            slot.pack(side="left", padx=5)
+            
+        # Game state controls
+        state_frame = tk.Frame(cf, bg=C_BG)
+        state_frame.pack(fill="x", padx=10, pady=(0, 10))
+        
+        # Pot and to-call
+        pot_frame = tk.Frame(state_frame, bg=C_BG)
+        pot_frame.pack(side="left", padx=(0, 20))
+        tk.Label(pot_frame, text="Current Pot", bg=C_BG, fg=C_TEXT).pack(anchor="w")
+        pot_inner = tk.Frame(pot_frame, bg=C_BG)
+        pot_inner.pack(pady=5)
+        tk.Label(pot_inner, text="$", bg=C_BG, fg=C_TEXT).pack(side="left")
+        self.pot_entry = tk.Entry(pot_inner, width=8, **self.STYLE_ENTRY)
+        self.pot_entry.insert(0, str(self.small_blind.get() + self.big_blind.get()))
+        self.pot_entry.pack(side="left", padx=5)
+        
+        call_frame = tk.Frame(state_frame, bg=C_BG)
+        call_frame.pack(side="left")
+        tk.Label(call_frame, text="To Call", bg=C_BG, fg=C_TEXT).pack(anchor="w")
+        call_inner = tk.Frame(call_frame, bg=C_BG)
+        call_inner.pack(pady=5)
+        tk.Label(call_inner, text="$", bg=C_BG, fg=C_TEXT).pack(side="left")
+        self.call_entry = tk.Entry(call_inner, width=8, **self.STYLE_ENTRY)
+        self.call_entry.insert(0, str(self.big_blind.get()))
+        self.call_entry.pack(side="left", padx=5)
+        
+        # Players in hand
+        players_frame = tk.Frame(state_frame, bg=C_BG)
+        players_frame.pack(side="left", padx=(20, 0))
+        tk.Label(players_frame, text="Players in Hand", bg=C_BG, fg=C_TEXT).pack(anchor="w")
+        self.players_var = tk.StringVar(value="1,2,3,4,5,6")
+        players_entry = tk.Entry(players_frame, textvariable=self.players_var, width=15, **self.STYLE_ENTRY)
+        players_entry.pack(pady=5)
+        
+        # Update button
+        update_btn = StyledButton(state_frame, text="Update Game State", color=C_BTN_INFO,
+                                 hover_color=C_BTN_INFO_HOVER, command=self._update_game_state)
+        update_btn.pack(side="left", padx=(20, 0), pady=5)
+        
+    def _build_action_panel(self, parent):
+        """Build the action panel with decision buttons."""
+        af = tk.LabelFrame(parent, text=" ACTIONS ", bg=C_BG, fg=C_TEXT,
+                          font=self.FONT_SUBHEADER, bd=1, relief="groove")
+        af.pack(fill="x", pady=(0, 10))
+        
+        # Decision display
+        decision_frame = tk.Frame(af, bg=C_BG)
+        decision_frame.pack(fill="x", padx=10, pady=(10, 5))
+        tk.Label(decision_frame, text="Recommended Action:", bg=C_BG, fg=C_TEXT).pack(side="left")
+        self.decision_label = tk.Label(decision_frame, text="→ (Analyze hand first)", bg=C_BG, fg=C_TEXT_DIM,
+                                     font=("Arial", 12, "bold"))
+        self.decision_label.pack(side="left", padx=10)
+        
+        # Action buttons
+        btn_frame = tk.Frame(af, bg=C_BG)
+        btn_frame.pack(fill="x", padx=10, pady=(0, 10))
+        
+        # Analyze button
+        analyze_btn = StyledButton(btn_frame, text="Analyze Hand", color=C_BTN_PRIMARY,
+                                  hover_color=C_BTN_PRIMARY_HOVER, command=self.refresh)
+        analyze_btn.pack(side="left", padx=(0, 10))
+        
+        # Action buttons
+        fold_btn = StyledButton(btn_frame, text="Fold", color=C_BTN_DANGER,
+                               hover_color=C_BTN_DANGER_HOVER, command=lambda: self._record_action("FOLD"))
+        fold_btn.pack(side="left", padx=(0, 10))
+        
+        call_btn = StyledButton(btn_frame, text="Call", color=C_BTN_SUCCESS,
+                               hover_color=C_BTN_SUCCESS_HOVER, command=lambda: self._record_action("CALL"))
+        call_btn.pack(side="left", padx=(0, 10))
+        
+        raise_btn = StyledButton(btn_frame, text="Raise", color=C_BTN_WARNING,
+                                hover_color=C_BTN_WARNING_HOVER, command=lambda: self._record_action("RAISE"))
+        raise_btn.pack(side="left")
+        
+        # Reset button (right-aligned)
+        reset_btn = StyledButton(btn_frame, text="Reset", color=C_BTN_DARK,
+                                hover_color=C_BTN_DARK_HOVER, command=self._reset_table)
+        reset_btn.pack(side="right")
+        
+    def _build_analysis_area(self, parent):
+        """Build the analysis output area."""
+        af = tk.LabelFrame(parent, text=" ANALYSIS ", bg=C_BG, fg=C_TEXT,
+                          font=self.FONT_SUBHEADER, bd=1, relief="groove")
+        af.pack(fill="both", expand=True)
+        
+        # Stats panel (left)
+        stats_frame = tk.Frame(af, bg=C_BG, width=200)
+        stats_frame.pack(side="left", fill="y", padx=(10, 0), pady=10)
+        stats_frame.pack_propagate(False)
+        tk.Label(stats_frame, text="STATISTICS", bg=C_BG, fg=C_TEXT,
+                font=self.FONT_SUBHEADER).pack(anchor="w", pady=(0, 5))
+        self.stats_text = tk.Text(stats_frame, width=25, height=20, bg=C_PANEL, fg=C_TEXT,
+                                 font=self.FONT_BODY, wrap="word", padx=10, pady=10)
+        self.stats_text.pack(fill="both", expand=True)
+        self.stats_text.tag_configure("header", font=("Consolas", 10, "bold"))
+        self.stats_text.tag_configure("dim", foreground=C_TEXT_DIM)
+        
+        # Output panel (right)
+        output_frame = tk.Frame(af, bg=C_BG)
+        output_frame.pack(side="left", fill="both", expand=True, padx=10, pady=10)
+        tk.Label(output_frame, text="HAND ANALYSIS", bg=C_BG, fg=C_TEXT,
+                font=self.FONT_SUBHEADER).pack(anchor="w", pady=(0, 5))
+        self.out_body = tk.Text(output_frame, bg=C_PANEL, fg=C_TEXT,
+                               font=self.FONT_BODY, wrap="word", padx=10, pady=10)
+        self.out_body.pack(fill="both", expand=True)
+        
+        # Configure text tags
+        for widget in (self.out_body, self.stats_text):
+            widget.tag_configure("header", font=("Consolas", 10, "bold"))
+            widget.tag_configure("subheader", font=("Consolas", 10, "bold"), foreground="#10b981")
+            widget.tag_configure("dim", foreground=C_TEXT_DIM)
+            widget.tag_configure("positive", foreground="#10b981")
+            widget.tag_configure("negative", foreground="#ef4444")
+            
+    # Helper methods for the action panel
+    def _update_game_state(self):
+        """Update the game state based on UI inputs."""
+        try:
+            pot = float(self.pot_entry.get())
+            to_call = float(self.call_entry.get())
+            players_str = self.players_var.get().strip()
+            players_in_hand = [int(p.strip()) for p in re.split(r'[,\s]+', players_str) if p.strip()]
+            
+            self.game_state.is_active = True
+            self.game_state.pot = pot
+            self.game_state.to_call = to_call
+            self.game_state.players_in_hand = players_in_hand
+            
+            self.refresh()
+        except ValueError as e:
+            messagebox.showerror("Input Error", f"Invalid input: {e}")
+            
+    def _record_action(self, action):
+        """Record a player action."""
+        if not self._last_decision_id:
+            messagebox.showinfo("Info", "Please analyze your hand first.")
+            return
+            
+        messagebox.showinfo("Action Recorded", f"You chose to {action}")
+        self.refresh()
+        
+    def _reset_table(self):
+        """Reset the table state."""
+        for slot in self.hole + self.board:
+            slot.clear()
+            
+        self.game_state = GameState()
+        self.pot_entry.delete(0, tk.END)
+        self.pot_entry.insert(0, str(self.small_blind.get() + self.big_blind.get()))
+        self.call_entry.delete(0, tk.END)
+        self.call_entry.insert(0, str(self.big_blind.get()))
+        self.players_var.set(",".join(str(i) for i in range(1, self.num_players.get() + 1)))
+        
+        self._clear_output_panels()
+        self._display_welcome_message()
+        self.decision_label.config(text="→ (Analyze hand first)", fg=C_TEXT_DIM)
+        self.refresh()
 
     # ────────────────────────────────────────────────────────────────────
     #  Refresh logic – only the parts that changed are shown
@@ -327,6 +563,75 @@ class PokerAssistant(tk.Tk):
 
     # (The rest of the class remains unchanged – only _update_analysis_panel
     # now returns the HandAnalysis object so refresh() can pass equity.)
+
+    # Helper methods for card management
+    def place_next_free(self, card):
+        """Place a card in the next free slot if it was dragged to an invalid location."""
+        # This is a no-op in this version, but could be used to auto-place cards
+        pass
+    
+    def grey_out(self, card):
+        """Grey out a card in the deck grid to show it's in use."""
+        card_str = str(card)
+        if card_str in self.grid_cards:
+            self.grid_cards[card_str].config(bg=C_CARD_INACTIVE, fg=C_TEXT_DIM)
+            self.used_cards.add(card_str)
+    
+    def un_grey(self, card):
+        """Un-grey a card in the deck grid when it's removed from a slot."""
+        card_str = str(card)
+        if card_str in self.grid_cards:
+            self.grid_cards[card_str].config(bg=C_CARD, fg=card.suit.color)
+            if card_str in self.used_cards:
+                self.used_cards.remove(card_str)
+    
+    # Helper methods for UI panels
+    def _clear_output_panels(self):
+        """Clear the output and stats panels."""
+        self.out_body.delete("1.0", "end")
+        self.stats_text.delete("1.0", "end")
+    
+    def _display_welcome_message(self):
+        """Display a welcome message in the output panel."""
+        self.out_body.insert("end", "Welcome to Poker Assistant Pro!\n\n", "header")
+        self.out_body.insert("end", "Drag cards from the deck to your hand and the board, then click 'Analyze Hand' to get advice.\n\n", "dim")
+        self.out_body.insert("end", "TIPS:\n", "subheader")
+        self.out_body.insert("end", "• Double-click on a card to remove it\n")
+        self.out_body.insert("end", "• Use the 'Update Game State' button to set pot size and players in hand\n")
+        self.out_body.insert("end", "• The table visualization shows your position and active players\n")
+    
+    def _update_stats_panel(self):
+        """Update the statistics panel with current game info."""
+        self.stats_text.delete("1.0", "end")
+        
+        # Basic game info
+        self.stats_text.insert("end", "GAME INFO\n", "header")
+        self.stats_text.insert("end", f"Position: {self.position.get()}\n", "dim")
+        self.stats_text.insert("end", f"Stack: {self.stack_type.get()}\n", "dim")
+        self.stats_text.insert("end", f"Blinds: ${self.small_blind.get():.2f}/${self.big_blind.get():.2f}\n", "dim")
+        self.stats_text.insert("end", f"Players: {self.num_players.get()}\n\n", "dim")
+        
+        # Game state
+        self.stats_text.insert("end", "CURRENT STATE\n", "header")
+        if self.game_state.is_active:
+            self.stats_text.insert("end", f"Pot: ${self.game_state.pot:.2f}\n", "dim")
+            self.stats_text.insert("end", f"To Call: ${self.game_state.to_call:.2f}\n", "dim")
+            players_str = ", ".join(map(str, self.game_state.players_in_hand))
+            self.stats_text.insert("end", f"Players in hand: {players_str}\n\n", "dim")
+        else:
+            self.stats_text.insert("end", "No active hand\n\n", "dim")
+        
+        # Card counts
+        hole_count = sum(1 for s in self.hole if s.card)
+        board_count = sum(1 for s in self.board if s.card)
+        self.stats_text.insert("end", "CARDS\n", "header")
+        self.stats_text.insert("end", f"Hand: {hole_count}/2\n", "dim")
+        self.stats_text.insert("end", f"Board: {board_count}/5\n", "dim")
+        
+        # Add some strategy tips based on position
+        self.stats_text.insert("end", "\nSTRATEGY TIPS\n", "header")
+        pos = Position[self.position.get()]
+        self.stats_text.insert("end", f"{get_position_advice(pos)}\n", "dim")
 
     def _update_analysis_panel(self, hole, board) -> HandAnalysis:
         pos = Position[self.position.get()]
