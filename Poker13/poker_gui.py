@@ -18,7 +18,7 @@ from typing import List, Dict, Tuple, Optional
 from poker_modules import (
     Suit, Rank, RANKS_MAP, Card, Position, StackType, PlayerAction, 
     HandAnalysis, GameState, get_hand_tier, analyse_hand, to_two_card_str,
-    get_position_advice, get_hand_advice
+    get_position_advice, get_hand_advice, RANK_ORDER
 )
 from poker_init import open_db, record_decision
 
@@ -404,7 +404,8 @@ class PokerAssistant(tk.Tk):
             raise_frame.grid(row=row, column=3, padx=2)
             raise_entry = tk.Entry(raise_frame, width=6, **self.STYLE_ENTRY)
             raise_entry.pack(side="left")
-            StyledButton(raise_frame, text="Raise", color=C_BTN_WARNING, hover_color=C_BTN_WARNING_HOVER,padx=8,pady=4, command=lambda p=p_num, e=raise_entry: self._handle_opponent_action(p, PlayerAction.RAISE, e.get())).grid(row=row, column=4, padx=2)
+            StyledButton(raise_frame, text="Raise", color=C_BTN_WARNING, hover_color=C_BTN_WARNING_HOVER, padx=8, pady=4, 
+                        command=lambda p=p_num, e=raise_entry: self._handle_opponent_action(p, PlayerAction.RAISE, e.get())).pack(side="left", padx=(3,0))
             row += 1
 
         self.action_panel.pack(fill="x", pady=(0, 10))
@@ -423,15 +424,21 @@ class PokerAssistant(tk.Tk):
                     messagebox.showwarning("Invalid Raise", "Raise must be greater than the amount to call.")
                     return
                 self.game_state.pot += amount
-                self.game_state.to_call = amount - self.game_state.to_call # New amount to call for others
+                self.game_state.to_call = amount  # Set new to_call amount (not the difference)
             except (ValueError, TypeError):
                 messagebox.showerror("Invalid Amount", "Please enter a valid number for the raise.")
                 return
         
         # Hide the row for the player who acted
-        for widget in self.action_panel.grid_slaves(row=player_num):
-            widget.grid_forget()
-        self.refresh()
+        for widget in self.action_panel.winfo_children():
+            if isinstance(widget, tk.Label) and widget.cget("text") == f"Player {player_num}:":
+                row = widget.grid_info()["row"]
+                for w in self.action_panel.grid_slaves(row=row):
+                    w.grid_forget()
+                break
+        
+        # Refresh the action panel with updated pot/to_call
+        self.record_player_actions()
         
     def _mark_showdown(self, won: int):
         if self._last_decision_id is None: messagebox.showinfo("No Decision", "Analyze a hand first."); return
