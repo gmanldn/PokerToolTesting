@@ -552,7 +552,7 @@ class CardSlot(tk.Frame):
 class PokerAssistant(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("Poker Assistant v9 - Professional Edition")
+        self.title("Poker Assistant v11 - Professional Edition")
         self.geometry("1400x800")
         self.minsize(1200, 700)
         self.configure(bg=C_BG)
@@ -639,13 +639,20 @@ class PokerAssistant(tk.Tk):
             )
             suit_frame.pack(fill="x", pady=3)
             
-            # Create card grid
-            card_row = tk.Frame(suit_frame, bg=C_PANEL)
-            card_row.pack(padx=5, pady=5)
+            # Create two rows for cards
+            rows_container = tk.Frame(suit_frame, bg=C_PANEL)
+            rows_container.pack(padx=5, pady=5)
             
-            for r in RANKS:
+            card_row1 = tk.Frame(rows_container, bg=C_PANEL)
+            card_row1.pack()
+            
+            card_row2 = tk.Frame(rows_container, bg=C_PANEL)
+            card_row2.pack(pady=(3, 0))  # Small gap between rows
+            
+            # Split ranks between two rows (7 in first row, 6 in second)
+            for i, r in enumerate(RANKS):
                 card = Card(r, suit)
-                w = DraggableCard(card_row, card, self)
+                w = DraggableCard(card_row1 if i < 7 else card_row2, card, self)
                 w.pack(side="left", padx=2)
                 self.grid_cards[str(card)] = w
         
