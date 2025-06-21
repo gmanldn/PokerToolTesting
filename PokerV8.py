@@ -1,4 +1,3 @@
-# PokerV8.py – Visual Poker Assistant, polished version
 from __future__ import annotations
 
 import logging
@@ -34,7 +33,7 @@ log = logging.getLogger(__name__)
 
 RANKS = "23456789TJQKA"
 CARD_SIZE = 52
-GUI_W, GUI_H = 1280, 830
+GUI_W, GUI_H = 1400, 900
 FULL_DECK: tuple["Card", ...]  # defined after Card class
 
 POSITION_BULLY = {1: 1.0, 2: 0.7, 3: 0.5, 4: 0.4, 5: 0.6, 6: 0.85}
@@ -415,7 +414,8 @@ class PokerAssistant(tk.Tk):
         super().__init__()
         self.title("Poker Assistant v8")
         self.geometry(f"{GUI_W}x{GUI_H}")
-        self.resizable(False, False)
+        self.resizable(True, True)  # Allow resizing
+        self.minsize(1200, 800)  # Set minimum size
 
         # shared state
         self.position = tk.StringVar(value=Position.BTN.name)
@@ -427,50 +427,97 @@ class PokerAssistant(tk.Tk):
         self.used: set[str] = set()
 
         self._build_gui()
-        self.refresh()
+        self.after(100, self.refresh)  # Initial refresh after GUI is built
 
     # ─────────────────────────────────────────────────────────────────────
     def _build_gui(self):
-        left = tk.Frame(self, bg="#f5f5f5")
-        left.pack(side="left", fill="y", padx=4, pady=4)
-        right = tk.Frame(self, bg="#f5f5f5")
-        right.pack(side="left", fill="both", expand=True, padx=4, pady=4)
+        # Main container with proper weights
+        main_frame = tk.Frame(self, bg="#f0f0f0")
+        main_frame.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        # Left panel for cards (fixed width)
+        left = tk.Frame(main_frame, bg="#f5f5f5", width=320)
+        left.pack(side="left", fill="y", padx=(0, 10))
+        left.pack_propagate(False)
+        
+        # Right panel for game and analysis (expandable)
+        right = tk.Frame(main_frame, bg="#f5f5f5")
+        right.pack(side="left", fill="both", expand=True)
 
-        # grid
-        tk.Label(left, text="Card Selection", font=("Arial", 12, "bold"), bg="#f5f5f5").pack()
+        # Card selection grid
+        tk.Label(left, text="Card Selection", font=("Arial", 14, "bold"), bg="#f5f5f5").pack(pady=(0, 10))
+        
+        card_frame = tk.Frame(left, bg="#f5f5f5")
+        card_frame.pack(fill="both", expand=True)
+        
         for suit in Suit:
-            frame = tk.LabelFrame(left, text=f"{suit.value} {suit.name.title()}", fg=suit.color, bg="#f5f5f5")
-            frame.pack(padx=2, pady=2)
+            frame = tk.LabelFrame(card_frame, text=f"{suit.value} {suit.name.title()}", 
+                                 fg=suit.color, bg="#f5f5f5", font=("Arial", 10, "bold"))
+            frame.pack(fill="x", padx=2, pady=2)
             for r in RANKS:
                 card = Card(r, suit)
                 w = DraggableCard(frame, card, self)
                 w.pack(side="left", padx=1, pady=1)
                 self.grid_cards[str(card)] = w
 
-        # table
-        table = tk.Frame(right, bg="darkgreen", bd=4, relief="ridge")
-        table.pack(pady=6)
+        # Game area
+        game_frame = tk.Frame(right, bg="#f5f5f5")
+        game_frame.pack(fill="x", pady=(0, 10))
+        
+        # Table
+        table = tk.Frame(game_frame, bg="darkgreen", bd=4, relief="ridge")
+        table.pack(pady=10)
 
-        self.hole = [CardSlot(table, f"Hole{i+1}", self) for i in range(2)]
+        # Hole cards
+        hole_frame = tk.Frame(table, bg="darkgreen")
+        hole_frame.pack(side="left", padx=5)
+        
+        tk.Label(hole_frame, text="Your Hand", bg="darkgreen", fg="white", 
+                font=("Arial", 10, "bold")).pack()
+        hole_slots = tk.Frame(hole_frame, bg="darkgreen")
+        hole_slots.pack()
+        
+        self.hole = [CardSlot(hole_slots, f"Hole{i+1}", self) for i in range(2)]
         for s in self.hole:
-            s.pack(side="left", padx=4, pady=4)
+            s.pack(side="left", padx=2, pady=2)
 
-        self.board = [CardSlot(table, n, self) for n in ("Flop1", "Flop2", "Flop3", "Turn", "River")]
+        # Board cards
+        board_frame = tk.Frame(table, bg="darkgreen")
+        board_frame.pack(side="left", padx=10)
+        
+        tk.Label(board_frame, text="Community Cards", bg="darkgreen", fg="white", 
+                font=("Arial", 10, "bold")).pack()
+        board_slots = tk.Frame(board_frame, bg="darkgreen")
+        board_slots.pack()
+        
+        self.board = [CardSlot(board_slots, n, self) for n in ("Flop1", "Flop2", "Flop3", "Turn", "River")]
         for s in self.board:
-            s.pack(side="left", padx=3, pady=3)
+            s.pack(side="left", padx=2, pady=2)
 
-        # controls
-        ctrl = tk.LabelFrame(right, text="Controls", bg="#f5f5f5")
-        ctrl.pack(fill="x", pady=6)
-        ttk.Label(ctrl, text="Position").grid(row=0, column=0, padx=4, pady=2, sticky="w")
-        pos_cb = ttk.Combobox(ctrl, textvariable=self.position, values=[p.name for p in Position], state="readonly", width=10)
-        pos_cb.grid(row=0, column=1, padx=4, sticky="w")
+        # Controls
+        ctrl = tk.LabelFrame(game_frame, text="Game Settings", bg="#f5f5f5", 
+                            font=("Arial", 12, "bold"))
+        ctrl.pack(fill="x", pady=10)
+        
+        # Position and stack controls
+        top_ctrl = tk.Frame(ctrl, bg="#f5f5f5")
+        top_ctrl.pack(fill="x", padx=10, pady=5)
+        
+        ttk.Label(top_ctrl, text="Position:").grid(row=0, column=0, padx=5, pady=2, sticky="w")
+        pos_cb = ttk.Combobox(top_ctrl, textvariable=self.position, 
+                             values=[p.name for p in Position], state="readonly", width=8)
+        pos_cb.grid(row=0, column=1, padx=5, sticky="w")
         pos_cb.bind("<<ComboboxSelected>>", lambda *_: self.refresh())
 
-        ttk.Label(ctrl, text="Stack").grid(row=1, column=0, padx=4, pady=2, sticky="w")
-        stack_cb = ttk.Combobox(ctrl, textvariable=self.stack_type, values=[s.value for s in StackType], state="readonly", width=10)
-        stack_cb.grid(row=1, column=1, padx=4, sticky="w")
+        ttk.Label(top_ctrl, text="Stack:").grid(row=0, column=2, padx=5, pady=2, sticky="w")
+        stack_cb = ttk.Combobox(top_ctrl, textvariable=self.stack_type, 
+                               values=[s.value for s in StackType], state="readonly", width=8)
+        stack_cb.grid(row=0, column=3, padx=5, sticky="w")
         stack_cb.bind("<<ComboboxSelected>>", lambda *_: self.refresh())
+
+        # Pot and call controls
+        bottom_ctrl = tk.Frame(ctrl, bg="#f5f5f5")
+        bottom_ctrl.pack(fill="x", padx=10, pady=5)
 
         def _validate(num_var: tk.DoubleVar):
             try:
@@ -482,41 +529,50 @@ class PokerAssistant(tk.Tk):
             finally:
                 self.refresh()
 
-        ttk.Label(ctrl, text="Pot").grid(row=0, column=2, padx=4, sticky="w")
-        pot_e = ttk.Entry(ctrl, textvariable=self.pot_size, width=9)
-        pot_e.grid(row=0, column=3, padx=4, sticky="w")
+        ttk.Label(bottom_ctrl, text="Pot Size:").grid(row=0, column=0, padx=5, sticky="w")
+        pot_e = ttk.Entry(bottom_ctrl, textvariable=self.pot_size, width=10)
+        pot_e.grid(row=0, column=1, padx=5, sticky="w")
         pot_e.bind("<FocusOut>", lambda *_: _validate(self.pot_size))
 
-        ttk.Label(ctrl, text="To Call").grid(row=1, column=2, padx=4, sticky="w")
-        call_e = ttk.Entry(ctrl, textvariable=self.call_amt, width=9)
-        call_e.grid(row=1, column=3, padx=4, sticky="w")
+        ttk.Label(bottom_ctrl, text="To Call:").grid(row=0, column=2, padx=5, sticky="w")
+        call_e = ttk.Entry(bottom_ctrl, textvariable=self.call_amt, width=10)
+        call_e.grid(row=0, column=3, padx=5, sticky="w")
         call_e.bind("<FocusOut>", lambda *_: _validate(self.call_amt))
 
-        ttk.Button(ctrl, text="Clear", command=self.clear_all).grid(row=0, column=4, rowspan=2, padx=8)
+        ttk.Button(bottom_ctrl, text="Clear All", command=self.clear_all).grid(row=0, column=4, padx=10)
 
-        # Enhanced output area with proper frames and scrollbars
-        output_frame = tk.LabelFrame(right, text="Analysis & Advice", font=("Arial", 11, "bold"), bg="#f5f5f5")
-        output_frame.pack(fill="both", expand=True, pady=4)
+        # Analysis output area
+        analysis_frame = tk.LabelFrame(right, text="Poker Analysis & Strategy", 
+                                      font=("Arial", 12, "bold"), bg="#f5f5f5")
+        analysis_frame.pack(fill="both", expand=True, pady=(10, 0))
 
-        # Header info display
-        header_frame = tk.Frame(output_frame, bg="white", relief="solid", bd=1)
-        header_frame.pack(fill="x", padx=5, pady=(5, 0))
+        # Create notebook for tabbed interface
+        notebook = ttk.Notebook(analysis_frame)
+        notebook.pack(fill="both", expand=True, padx=5, pady=5)
+
+        # Analysis tab
+        analysis_tab = tk.Frame(notebook, bg="#fafafa")
+        notebook.add(analysis_tab, text="Analysis")
+
+        # Header info
+        header_frame = tk.Frame(analysis_tab, bg="#e8f4fd", relief="solid", bd=1)
+        header_frame.pack(fill="x", padx=5, pady=5)
         
         self.out_head = tk.Text(
             header_frame, 
-            height=2, 
-            font=("Consolas", 11, "bold"), 
-            bg="white",
-            fg="#333333",
+            height=3, 
+            font=("Arial", 11, "bold"), 
+            bg="#e8f4fd",
+            fg="#2c3e50",
             wrap="word",
             relief="flat",
-            padx=10,
-            pady=5
+            padx=15,
+            pady=10
         )
         self.out_head.pack(fill="x")
 
-        # Main analysis display with scrollbar
-        body_frame = tk.Frame(output_frame, bg="#f5f5f5")
+        # Main analysis with scrollbar
+        body_frame = tk.Frame(analysis_tab, bg="#fafafa")
         body_frame.pack(fill="both", expand=True, padx=5, pady=5)
         
         scrollbar = tk.Scrollbar(body_frame)
@@ -532,29 +588,46 @@ class PokerAssistant(tk.Tk):
             relief="solid",
             bd=1,
             padx=15,
-            pady=10,
-            spacing1=2,
-            spacing2=2,
-            spacing3=2
+            pady=10
         )
         self.out_body.pack(side="left", fill="both", expand=True)
         scrollbar.config(command=self.out_body.yview)
 
+        # Quick Stats tab
+        stats_tab = tk.Frame(notebook, bg="#fafafa")
+        notebook.add(stats_tab, text="Quick Stats")
+        
+        self.stats_text = tk.Text(
+            stats_tab,
+            font=("Consolas", 11),
+            bg="#fafafa",
+            fg="#2c3e50",
+            wrap="word",
+            relief="flat",
+            padx=15,
+            pady=10
+        )
+        self.stats_text.pack(fill="both", expand=True)
+
         # Configure text tags for styling
-        self.out_body.tag_configure("header", font=("Arial", 12, "bold"), foreground="#34495e", spacing3=5)
-        self.out_body.tag_configure("metric", font=("Consolas", 11), foreground="#2c3e50")
-        self.out_body.tag_configure("positive", foreground="#27ae60", font=("Consolas", 11, "bold"))
-        self.out_body.tag_configure("negative", foreground="#e74c3c", font=("Consolas", 11, "bold"))
-        self.out_body.tag_configure("decision", font=("Arial", 14, "bold"), foreground="#2980b9", spacing1=10)
-        self.out_body.tag_configure("advice", font=("Arial", 10), foreground="#555555", spacing1=5, spacing3=5)
-        self.out_body.tag_configure("warning", font=("Arial", 10, "bold"), foreground="#e67e22")
+        for text_widget in [self.out_body, self.stats_text]:
+            text_widget.tag_configure("header", font=("Arial", 12, "bold"), foreground="#2980b9", spacing3=8)
+            text_widget.tag_configure("subheader", font=("Arial", 11, "bold"), foreground="#34495e", spacing3=5)
+            text_widget.tag_configure("metric", font=("Consolas", 10), foreground="#2c3e50")
+            text_widget.tag_configure("positive", foreground="#27ae60", font=("Consolas", 10, "bold"))
+            text_widget.tag_configure("negative", foreground="#e74c3c", font=("Consolas", 10, "bold"))
+            text_widget.tag_configure("neutral", foreground="#f39c12", font=("Consolas", 10, "bold"))
+            text_widget.tag_configure("decision", font=("Arial", 16, "bold"), foreground="#2980b9", spacing1=10)
+            text_widget.tag_configure("advice", font=("Arial", 10), foreground="#555555", spacing1=3)
+            text_widget.tag_configure("warning", font=("Arial", 10, "bold"), foreground="#e67e22")
+            text_widget.tag_configure("tip", font=("Arial", 10, "italic"), foreground="#8e44ad")
 
     # ─────────────────────────────────────────────────────────────────────
     # grid helpers
     def grey_out(self, card: Card):
         self.used.add(str(card))
         w = self.grid_cards[str(card)]
-        w.configure(bg="#b0b0b0", relief="sunken", state="disabled", text=f"{card}\n✕")
+        w.configure(bg="#d0d0d0", relief="sunken", state="disabled", text=f"{card}\n✕")
 
     def un_grey(self, card: Card):
         key = str(card)
@@ -580,94 +653,140 @@ class PokerAssistant(tk.Tk):
     def refresh(self):
         hole = [s.card for s in self.hole if s.card]
         board = [s.card for s in self.board if s.card]
-
-        self.out_head.configure(state="normal")
-        self.out_head.delete(1.0, "end")
-        self.out_body.configure(state="normal")
-        self.out_body.delete(1.0, "end")
-
-        if len(hole) != 2:
-            self.out_head.insert("end", "⚠ Select exactly two hole cards to begin analysis")
-            self.out_head.configure(state="disabled")
-            self.out_body.configure(state="disabled")
-            return
-
+        
         pos = Position[self.position.get()]
         stack_bb = StackType[self.stack_type.get()].default_bb
         pot = self.pot_size.get()
         call = self.call_amt.get()
 
-        analysis = analyse_hand(hole, board, pos, stack_bb, pot, call)
-        tier = hand_tier(hole)
+        # Clear all text areas
+        for widget in [self.out_head, self.out_body, self.stats_text]:
+            widget.configure(state="normal")
+            widget.delete(1.0, "end")
 
-        # Header - game state summary
-        self.out_head.insert(
-            "end",
-            f"Playing {to_two_card_str(hole)} ({tier.upper()}) | "
-            f"Board: {' '.join(map(str, board)) or 'Preflop'} | "
-            f"Position: {pos.name} | Stack: {stack_bb}BB"
-        )
-        self.out_head.configure(state="disabled")
+        # Always show header info
+        game_state = f"Position: {pos.name} | Stack: {stack_bb}BB | Pot: {pot:.1f} | To Call: {call:.1f}"
+        if len(hole) == 2:
+            tier = hand_tier(hole)
+            hand_info = f"Hand: {to_two_card_str(hole)} ({tier.upper()})"
+            board_info = f"Board: {' '.join(map(str, board)) or 'Preflop'}"
+            self.out_head.insert("end", f"{hand_info} | {board_info}\n{game_state}")
+        else:
+            self.out_head.insert("end", f"⚠ Select two hole cards to start analysis\n{game_state}")
 
-        # Body - detailed analysis
-        self.out_body.insert("end", "EQUITY ANALYSIS\n", "header")
-        self.out_body.insert("end", f"Your Equity:      {analysis.equity:6.1%}\n", "metric")
-        self.out_body.insert("end", f"Required Equity:  {analysis.required_eq:6.1%}\n", "metric")
+        # Quick stats - always show useful info
+        self.stats_text.insert("end", "QUICK REFERENCE\n", "header")
+        self.stats_text.insert("end", f"Position: {pos.name} - {get_position_advice(pos)}\n\n", "advice")
         
-        equity_tag = "positive" if analysis.equity > analysis.required_eq else "negative"
-        self.out_body.insert("end", f"Equity Edge:      {analysis.equity - analysis.required_eq:+6.1%}\n", equity_tag)
+        self.stats_text.insert("end", "STACK SIZES\n", "subheader")
+        self.stats_text.insert("end", f"Current Stack: {stack_bb}BB\n", "metric")
+        if pot > 0:
+            spr = stack_bb / pot
+            self.stats_text.insert("end", f"Stack-to-Pot Ratio: {spr:.1f}\n", "metric")
+            if spr < 3:
+                self.stats_text.insert("end", "⚠ Low SPR - Commit or fold strategy\n", "warning")
+            elif spr > 15:
+                self.stats_text.insert("end", "⚠ Deep stacked - Position crucial\n", "warning")
         
-        self.out_body.insert("end", "\nEXPECTED VALUE\n", "header")
-        ev_call_tag = "positive" if analysis.ev_call > 0 else "negative"
-        ev_push_tag = "positive" if analysis.ev_push > 0 else "negative"
-        self.out_body.insert("end", f"EV of Call:       {analysis.ev_call:+7.2f} chips\n", ev_call_tag)
-        self.out_body.insert("end", f"EV of Raise:      {analysis.ev_push:+7.2f} chips\n", ev_push_tag)
-        
-        self.out_body.insert("end", "\nGAME DYNAMICS\n", "header")
-        self.out_body.insert("end", f"Stack-to-Pot:     {analysis.spr:6.1f}\n", "metric")
-        self.out_body.insert("end", f"Aggression:       {analysis.aggression:6.2f}\n", "metric")
-        self.out_body.insert("end", f"Pot Odds:         {pot_odds(call, pot)*100:5.1f}%\n", "metric")
-        
-        # Decision
-        self.out_body.insert("end", "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", "metric")
-        self.out_body.insert("end", f"RECOMMENDED ACTION: {analysis.decision}\n", "decision")
-        self.out_body.insert("end", "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n", "metric")
-        
-        # Strategic advice
-        self.out_body.insert("end", "\nSTRATEGIC ADVICE\n", "header")
-        
-        # Position advice
-        pos_advice = get_position_advice(pos)
-        self.out_body.insert("end", f"Position: {pos_advice}\n", "advice")
-        
-        # Hand strength advice
-        hand_advice = get_hand_advice(tier, analyze_board_texture(board))
-        self.out_body.insert("end", f"Hand: {hand_advice}\n", "advice")
-        
-        # Board texture
-        if board:
+        self.stats_text.insert("end", "\nPOT ODDS\n", "subheader")
+        if call > 0 and pot > 0:
+            odds = pot_odds(call, pot)
+            self.stats_text.insert("end", f"Pot Odds: {odds:.1%} ({call:.1f} to win {pot:.1f})\n", "metric")
+            self.stats_text.insert("end", f"Breakeven Equity: {odds:.1%}\n", "metric")
+        else:
+            self.stats_text.insert("end", "No current betting action\n", "metric")
+
+        # Main analysis
+        if len(hole) != 2:
+            self.out_body.insert("end", "GETTING STARTED\n", "header")
+            self.out_body.insert("end", "1. Drag two cards to 'Hole1' and 'Hole2' slots\n", "advice")
+            self.out_body.insert("end", "2. Optionally add community cards (Flop, Turn, River)\n", "advice")
+            self.out_body.insert("end", "3. Set your table position and stack size\n", "advice")
+            self.out_body.insert("end", "4. Enter current pot size and amount to call\n", "advice")
+            self.out_body.insert("end", "5. Get instant analysis and recommendations!\n", "advice")
+            
+            self.out_body.insert("end", f"\nCURRENT POSITION: {pos.name}\n", "subheader")
+            self.out_body.insert("end", f"{get_position_advice(pos)}\n\n", "advice")
+            
+            self.out_body.insert("end", "GENERAL STRATEGY TIPS\n", "subheader")
+            self.out_body.insert("end", "• Play tight in early position, looser in late position\n", "tip")
+            self.out_body.insert("end", "• Consider pot odds vs hand equity for calling decisions\n", "tip")
+            self.out_body.insert("end", "• Adjust aggression based on stack depth and position\n", "tip")
+            self.out_body.insert("end", "• Pay attention to board texture and drawing potential\n", "tip")
+        else:
+            # Full analysis with cards
+            analysis = analyse_hand(hole, board, pos, stack_bb, pot, call)
+            tier = hand_tier(hole)
+
+            # Equity analysis
+            self.out_body.insert("end", "EQUITY ANALYSIS\n", "header")
+            self.out_body.insert("end", f"Your Equity:        {analysis.equity:7.1%}\n", "metric")
+            self.out_body.insert("end", f"Required Equity:    {analysis.required_eq:7.1%}\n", "metric")
+            
+            equity_diff = analysis.equity - analysis.required_eq
+            equity_tag = "positive" if equity_diff > 0 else "negative"
+            self.out_body.insert("end", f"Equity Edge:        {equity_diff:+7.1%}\n", equity_tag)
+            
+            # Expected value
+            self.out_body.insert("end", "\nEXPECTED VALUE\n", "header")
+            ev_call_tag = "positive" if analysis.ev_call > 0 else "negative"
+            ev_push_tag = "positive" if analysis.ev_push > 0 else "negative"
+            self.out_body.insert("end", f"EV of Call:         {analysis.ev_call:+8.2f} chips\n", ev_call_tag)
+            self.out_body.insert("end", f"EV of Raise:        {analysis.ev_push:+8.2f} chips\n", ev_push_tag)
+            
+            # Game dynamics
+            self.out_body.insert("end", "\nGAME DYNAMICS\n", "header")
+            self.out_body.insert("end", f"Stack-to-Pot:       {analysis.spr:7.1f}\n", "metric")
+            self.out_body.insert("end", f"Aggression Factor:  {analysis.aggression:7.2f}\n", "metric")
+            self.out_body.insert("end", f"Pot Odds:           {pot_odds(call, pot)*100:6.1f}%\n", "metric")
+            
+            # Hand strength
+            self.out_body.insert("end", "\nHAND STRENGTH\n", "header")
+            self.out_body.insert("end", f"Hand Category:      {tier.upper()}\n", "metric")
+            self.out_body.insert("end", f"Hand Notation:      {to_two_card_str(hole)}\n", "metric")
+            
+            # Decision
+            self.out_body.insert("end", "\n" + "="*50 + "\n", "metric")
+            decision_color = "positive" if analysis.decision == "RAISE" else "neutral" if analysis.decision == "CALL" else "negative"
+            self.out_body.insert("end", f"RECOMMENDED ACTION: {analysis.decision}\n", "decision")
+            self.out_body.insert("end", "="*50 + "\n", "metric")
+            
+            # Strategic advice
+            self.out_body.insert("end", "\nSTRATEGIC ADVICE\n", "header")
+            
+            # Position-specific advice
+            self.out_body.insert("end", f"Position Strategy: {get_position_advice(pos)}\n\n", "advice")
+            
+            # Hand-specific advice
             board_texture = analyze_board_texture(board)
-            self.out_body.insert("end", f"Board: {board_texture}\n", "advice")
-        
-        # SPR-based advice
-        if analysis.spr < 3:
-            self.out_body.insert("end", "\n⚠ Low SPR - Commit or fold. Avoid small bets.\n", "warning")
-        elif analysis.spr > 15:
-            self.out_body.insert("end", "\n⚠ Deep stacked - Position and implied odds crucial.\n", "warning")
+            hand_advice = get_hand_advice(tier, board_texture)
+            self.out_body.insert("end", f"Hand Strategy: {hand_advice}\n\n", "advice")
             
-        # Additional contextual advice
-        if analysis.equity > 0.70:
-            self.out_body.insert("end", "\n💪 Strong equity - Value bet aggressively!\n", "advice")
-        elif analysis.equity < 0.30 and call > 0:
-            self.out_body.insert("end", "\n⚠ Poor equity - Consider folding unless good implied odds.\n", "warning")
+            # Board texture advice
+            if board:
+                self.out_body.insert("end", f"Board Analysis: {board_texture}\n\n", "advice")
             
-        if tier in ["premium", "strong"] and len(board) == 0:
-            self.out_body.insert("end", "\n💡 Premium preflop - 3-bet or 4-bet for value.\n", "advice")
+            # Contextual warnings and tips
+            if analysis.spr < 3:
+                self.out_body.insert("end", "⚠ Low SPR Situation: Consider commitment threshold. Avoid small bets.\n", "warning")
+            elif analysis.spr > 15:
+                self.out_body.insert("end", "⚠ Deep Stack Play: Focus on position and implied odds.\n", "warning")
+                
+            if analysis.equity > 0.70:
+                self.out_body.insert("end", "💪 Strong Equity: Bet for value and protection!\n", "positive")
+            elif analysis.equity < 0.30 and call > 0:
+                self.out_body.insert("end", "⚠ Weak Equity: Consider folding unless great implied odds.\n", "warning")
+                
+            if tier in ["premium", "strong"] and not board:
+                self.out_body.insert("end", "💡 Premium Preflop: Consider 3-betting or 4-betting for value.\n", "tip")
 
-        self.out_body.configure(state="disabled")
+        # Disable editing
+        for widget in [self.out_head, self.out_body, self.stats_text]:
+            widget.configure(state="disabled")
 
-        # save quietly
-        save_session(pos, to_two_card_str(hole), "".join(str(c) for c in board), pot, stack_bb)
+        # Save session if we have hole cards
+        if len(hole) == 2:
+            save_session(pos, to_two_card_str(hole), "".join(str(c) for c in board), pot, stack_bb)
 
     # ─────────────────────────────────────────────────────────────────────
     def clear_all(self):
