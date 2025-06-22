@@ -178,44 +178,30 @@ class TableVisualization(tk.Canvas):
             is_dealer = seat == Position.BTN.value
             in_hand = seat in active_players
 
-            # Enhanced dealer button ----------------------------------------------
+            # Player circles with dealer highlighting
+            radius = 26 if is_hero else 22
+            
             if is_dealer:
-                # Make dealer button MUCH larger and more distinctive
-                radius = 35
-                # Draw outer glow effect
-                for i in range(3, 0, -1):
-                    glow_color = f"#{255:02x}{215-i*30:02x}{0:02x}"  # Gradient from gold to darker
-                    self.create_oval(px - radius - i*2, py - radius - i*2, 
-                                   px + radius + i*2, py + radius + i*2,
-                                   fill="", outline=glow_color, width=2)
-                
-                # Main dealer button
-                self.create_oval(px - radius, py - radius, px + radius, py + radius,
-                                fill=C_DEALER_PRIMARY, outline=C_DEALER_BORDER, width=4)
-                # Inner highlight
-                self.create_oval(px - radius + 6, py - radius + 6, px + radius - 6, py + radius - 6,
-                                fill="", outline=C_DEALER_SECONDARY, width=2)
-                
-                # Dealer text
-                self.create_text(px, py - 5, text="DEALER", font=("Arial", 9, "bold"), fill="black")
-                self.create_text(px, py + 8, text="BUTTON", font=("Arial", 8, "bold"), fill="black")
-                
+                # Dealer gets yellow background with black text
+                fill, outline, text_c = "#FFD700", "#B8860B", "black"  # Yellow/gold with black text
+                label = "YOU" if is_hero else f"P{seat}"
+                weight = "bold"
+                # Add a subtle glow for the dealer
+                self.create_oval(px - radius - 2, py - radius - 2, px + radius + 2, py + radius + 2,
+                               fill="", outline="#FFD700", width=2)
+            elif is_hero:
+                fill, outline, text_c = "#fbbf24", "#f59e0b", "black"
+                label, weight = "YOU", "bold"
+                # Hero glow effect
+                self.create_oval(px - radius - 3, py - radius - 3, px + radius + 3, py + radius + 3,
+                               fill="", outline="#fbbf24", width=2)
             else:
-                # Regular players
-                radius = 26 if is_hero else 22
-                if is_hero:
-                    fill, outline, text_c = "#fbbf24", "#f59e0b", "black"
-                    label, weight = "YOU", "bold"
-                    # Hero glow effect
-                    self.create_oval(px - radius - 3, py - radius - 3, px + radius + 3, py + radius + 3,
-                                   fill="", outline="#fbbf24", width=2)
-                else:
-                    fill, outline, text_c = (C_BTN_DARK, C_BORDER, "white") if in_hand else ("#4b5563", "#4b5563", "#aaaaaa")
-                    label, weight = f"P{seat}", "normal"
+                fill, outline, text_c = (C_BTN_DARK, C_BORDER, "white") if in_hand else ("#4b5563", "#4b5563", "#aaaaaa")
+                label, weight = f"P{seat}", "normal"
 
-                self.create_oval(px - radius, py - radius, px + radius, py + radius,
-                                fill=fill, outline=outline, width=3 if is_hero else 1)
-                self.create_text(px, py, text=label, font=("Arial", 11 if is_hero else 10, weight), fill=text_c)
+            self.create_oval(px - radius, py - radius, px + radius, py + radius,
+                            fill=fill, outline=outline, width=3 if (is_hero or is_dealer) else 1)
+            self.create_text(px, py, text=label, font=("Arial", 11 if (is_hero or is_dealer) else 10, weight), fill=text_c)
 
             # Enhanced blinds labels
             if seat == Position.SB.value:
