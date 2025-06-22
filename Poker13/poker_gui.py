@@ -166,24 +166,30 @@ class TableVisualization(tk.Canvas):
 
         # Enhanced players with prominent dealer button -----------------------
         num_players = self._app.num_players.get()
-        your_seat = Position[self._app.position.get()].value
         active_players = set(self._app.game_state.players_in_hand) if self._app.game_state.is_active else set(range(1, num_players + 1))
+        
+        # For testing: make P6 the dealer
+        dealer_seat = 6
 
         for seat in range(1, num_players + 1):
             visual_pos = (seat - 1 - self.table_rotation) % num_players
             angle = (visual_pos * 2 * math.pi / num_players) - (math.pi / 2)
             px, py = cx + int(rx * 1.35 * math.cos(angle)), cy + int(ry * 1.35 * math.sin(angle))
 
-            is_hero = seat == your_seat
-            is_dealer = seat == Position.BTN.value
+            # Determine if this is the hero - for now, let's say hero is seat 4 (bottom position)
+            is_hero = seat == 4
+            is_dealer = seat == dealer_seat
             in_hand = seat in active_players
 
-            # Player circles with dealer highlighting
+            # Draw player circles ----------------------------------------------
             radius = 26 if is_hero else 22
             
+            # Determine player styling
             if is_dealer:
                 # Dealer gets yellow background with black text
-                fill, outline, text_c = "#FFD700", "#B8860B", "black"  # Yellow/gold with black text
+                fill = "#FFD700"  # Gold/yellow
+                outline = "#B8860B"  # Dark golden rod border
+                text_c = "black"
                 label = "YOU" if is_hero else f"P{seat}"
                 weight = "bold"
                 # Add a subtle glow for the dealer
@@ -199,6 +205,7 @@ class TableVisualization(tk.Canvas):
                 fill, outline, text_c = (C_BTN_DARK, C_BORDER, "white") if in_hand else ("#4b5563", "#4b5563", "#aaaaaa")
                 label, weight = f"P{seat}", "normal"
 
+            # Draw the player circle
             self.create_oval(px - radius, py - radius, px + radius, py + radius,
                             fill=fill, outline=outline, width=3 if (is_hero or is_dealer) else 1)
             self.create_text(px, py, text=label, font=("Arial", 11 if (is_hero or is_dealer) else 10, weight), fill=text_c)
