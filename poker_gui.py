@@ -9,6 +9,7 @@ Enhanced version with automatic analysis updates on card placement.
     - "Clear All Cards" button
     - Keyboard shortcuts for instant card selection
     - Highlight next slot for card entry
+    - Separate table diagram window
 """
 from __future__ import annotations
 import tkinter as tk
@@ -25,6 +26,7 @@ from poker_modules import (
     get_position_advice, get_hand_advice, RANK_ORDER
 )
 from poker_init import open_db, record_decision
+from poker_tablediagram import TableDiagramWindow
 
 # ──────────────────────────────────────────────────────
 #  Constants & Colours - Enhanced
@@ -235,55 +237,6 @@ class PlayerToggle(tk.Frame):
         if self._is_active != active:
             self._toggle()
 
-class TableVisualization(tk.Canvas):
-    """Visual representation of the poker table."""
-    def __init__(self, master, app, **kwargs):
-        defaults = {"width": 400, "height": 250, "bg": C_TABLE, "highlightthickness": 0}
-        defaults.update(kwargs)
-        super().__init__(master, **defaults)
-        self._app = weakref.proxy(app)
-        self._draw_table()
-        
-    def _draw_table(self):
-        """Draw the basic table layout."""
-        w, h = 400, 250
-        
-        # Table oval
-        table_x1, table_y1, table_x2, table_y2 = 50, 50, 350, 200
-        self.create_oval(table_x1, table_y1, table_x2, table_y2, 
-                        fill="#0d3a26", outline="#2a7f5f", width=3)
-        
-        # Center area for pot
-        center_x, center_y = w // 2, h // 2
-        self.create_oval(center_x - 40, center_y - 20, center_x + 40, center_y + 20,
-                        fill="#1a5f3f", outline="", width=0)
-        
-        # Pot text placeholder
-        self.pot_text = self.create_text(center_x, center_y, text="POT: $0",
-                                       font=("Arial", 12, "bold"), fill=C_TEXT)
-        
-        # Stage indicator
-        self.stage_text = self.create_text(center_x, 25, text="Pre-flop",
-                                         font=("Arial", 10), fill=C_TEXT_DIM)
-        
-        # Info area
-        self.info_text = self.create_text(center_x, h - 25, text="",
-                                        font=("Arial", 9), fill=C_TEXT_DIM)
-        
-    def update_info(self, pot: float, to_call: float, stage: str, equity: Optional[float] = None):
-        """Update the table visualization with current game info."""
-        # Update pot
-        self.itemconfig(self.pot_text, text=f"POT: ${pot:.2f}")
-        
-        # Update stage
-        self.itemconfig(self.stage_text, text=stage)
-        
-        # Update info
-        info_parts = [f"To Call: ${to_call:.2f}"]
-        if equity is not None:
-            info_parts.append(f"Equity: {equity:.1f}%")
-        self.itemconfig(self.info_text, text=" • ".join(info_parts))
-
 class PokerAssistant(tk.Tk):
     FONT_HEADER = ("Arial", 13, "bold")
     FONT_SUBHEADER = ("Arial", 11, "bold")
@@ -299,8 +252,8 @@ class PokerAssistant(tk.Tk):
     def __init__(self):
         super().__init__()
         self.title("Poker Assistant v16 - Pro Edition")
-        self.geometry("1450x920")
-        self.minsize(1200, 800)
+        self.geometry("1100x920")
+        self.minsize(1000, 800)
         self.configure(bg=C_BG)
         self.option_add("*Font", "Arial 10")
 
@@ -313,7 +266,7 @@ class PokerAssistant(tk.Tk):
         
         # Seat positions
         self.hero_seat = tk.IntVar(value=1)
-        self.dealer_seat = tk.StringVar(value="S3")
+        self.dealer_seat = tk.IntVar(value=3)
 
         # Game state
         self.game_state = GameState()
@@ -324,12 +277,24 @@ class PokerAssistant(tk.Tk):
         self.player_toggles: Dict[int, PlayerToggle] = {}
         self._last_decision_id: Optional[int] = None
 
+        # Create table diagram window
+        self.table_window = TableDiagramWindow(self)
+        
         self._build_gui()
         self.update_active_players()
 
         # Keyboard shortcuts for quick card input
         self._key_entry_buffer = ""
         self.bind_all("<Key>", self._handle_keypress)
+        
+        # Handle window close
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
+
+    def _on_close(self):
+        """Handle main window close."""
+        if hasattr(self, 'table_window'):
+            self.table_window.destroy()
+        self.destroy()
 
     def force_refresh(self):
         """Force an immediate refresh of the entire UI."""
@@ -344,7 +309,6 @@ class PokerAssistant(tk.Tk):
         left_panel.pack(side="left", fill="y")
         left_panel.pack_propagate(False)
         self._build_card_grid(left_panel)
-        self._build_table_view(left_panel)
 
         # Right panel
         right_panel = tk.Frame(main, bg=C_BG)
@@ -399,15 +363,6 @@ class PokerAssistant(tk.Tk):
                 w.pack(side="left", padx=2)
                 self.grid_cards[str(card)] = w
 
-    def _build_table_view(self, parent):
-        """Build the table visualization panel."""
-        table_frame = tk.LabelFrame(parent, text=" 🎰 TABLE VIEW ", bg=C_PANEL, fg=C_TEXT,
-                                   font=self.FONT_SUBHEADER, bd=2, relief="groove")
-        table_frame.pack(fill="x", padx=10, pady=(10, 0))
-        
-        self.table_viz = TableVisualization(table_frame, self)
-        self.table_viz.pack(padx=10, pady=10)
-
     def _build_table_area(self, parent):
         """Build the table configuration area."""
         tf = tk.LabelFrame(parent, text=" 🪑 TABLE SETUP ", bg=C_BG, fg=C_TEXT,
@@ -452,7 +407,7 @@ class PokerAssistant(tk.Tk):
 
         # Second row: Players
         row2 = tk.Frame(tf, bg=C_BG)
-        row2.pack(fill="x", padx=15, pady=10)
+        row2.pack(fill="x", padx=15, pady=(5, 10))
 
         tk.Label(row2, text="Active Players:", bg=C_BG, fg=C_TEXT,
                 font=self.FONT_SMALL_LABEL).pack(side="left", padx=(0, 10))
@@ -462,6 +417,28 @@ class PokerAssistant(tk.Tk):
             toggle = PlayerToggle(row2, i, self, bg=C_BG)
             toggle.pack(side="left", padx=3)
             self.player_toggles[i] = toggle
+
+        # Third row: Hero and Dealer seats
+        row3 = tk.Frame(tf, bg=C_BG)
+        row3.pack(fill="x", padx=15, pady=(5, 10))
+
+        # Hero seat
+        hero_frame = tk.Frame(row3, bg=C_BG)
+        hero_frame.pack(side="left", padx=(0, 30))
+        tk.Label(hero_frame, text="Hero Seat:", bg=C_BG, fg=C_TEXT,
+                font=self.FONT_SMALL_LABEL).pack(side="left", padx=(0, 5))
+        hero_spin = tk.Spinbox(hero_frame, from_=1, to=9, textvariable=self.hero_seat,
+                              width=5, command=self.refresh, **self.STYLE_ENTRY)
+        hero_spin.pack(side="left")
+
+        # Dealer seat
+        dealer_frame = tk.Frame(row3, bg=C_BG)
+        dealer_frame.pack(side="left")
+        tk.Label(dealer_frame, text="Dealer Seat:", bg=C_BG, fg=C_TEXT,
+                font=self.FONT_SMALL_LABEL).pack(side="left", padx=(0, 5))
+        dealer_spin = tk.Spinbox(dealer_frame, from_=1, to=9, textvariable=self.dealer_seat,
+                                width=5, command=self.refresh, **self.STYLE_ENTRY)
+        dealer_spin.pack(side="left")
 
     def _build_control_panel(self, parent):
         """Build the game control panel."""
@@ -759,11 +736,21 @@ class PokerAssistant(tk.Tk):
 
         self._update_stats_panel()
 
-        # Update table visualization
+        # Update table diagram
+        active_players = {i for i, toggle in self.player_toggles.items() if toggle.is_active()}
         pot = self.game_state.pot if self.game_state.is_active else (self.small_blind.get() + self.big_blind.get())
         to_call = self.game_state.to_call if self.game_state.is_active else self.big_blind.get()
         equity = analysis.equity if analysis else None
-        self.table_viz.update_info(pot, to_call, stage, equity)
+        
+        self.table_window.update_state(
+            active_players=active_players,
+            hero_seat=self.hero_seat.get(),
+            dealer_seat=self.dealer_seat.get(),
+            pot=pot,
+            to_call=to_call,
+            stage=stage,
+            equity=equity
+        )
 
     def _clear_output_panels(self):
         """Clear all output text widgets."""
