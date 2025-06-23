@@ -2,6 +2,13 @@
 """
 Graphical user interface and in-game flow for Poker-Assistant.
 Enhanced version with automatic analysis updates on card placement.
+
+* 2024 Upgrade:
+    - Large suit icons in card grid
+    - Pane refreshing fix after card add/remove
+    - "Clear All Cards" button
+    - Keyboard shortcuts for instant card selection
+    - Highlight next slot for card entry
 """
 from __future__ import annotations
 import tkinter as tk
@@ -40,6 +47,11 @@ C_DEALER_BORDER = "#B8860B"  # Dark golden rod
 C_CARD_SELECTED = "#fbbf24"  # Yellow for selected card
 C_PLAYER_ACTIVE = "#10b981"  # Green for active player
 C_PLAYER_INACTIVE = "#6b7280"  # Gray for folded player
+
+SUIT_COLORS = {
+    "red": "#f43f5e",
+    "black": "#38bdf8"
+}
 
 # ──────────────────────────────────────────────────────
 #  GUI Widgets
@@ -104,36 +116,42 @@ class CardSlot(tk.Frame):
             return False  # Slot already occupied
         
         self.card = card
-        for w in self.winfo_children(): 
+        for w in self.winfo_children():
             w.destroy()
         
         inner = tk.Label(self, text=str(card), font=("Arial", 16, "bold"),
                          fg=card.suit.color, bg=C_CARD, bd=1, relief="solid", cursor="hand2")
         inner.pack(expand=True, fill="both", padx=2, pady=2)
         inner.bind("<Button-1>", lambda *_: self.clear())
-        
+
         self._app.grey_out(card)
-        
-        # Force immediate refresh after card placement
-        self.after(1, self._app.force_refresh)
+
+        # Immediate refresh
+        self._app.force_refresh()
         return True
 
     def clear(self):
-        if not self.card: 
+        if not self.card:
             return
         
         self._app.un_grey(self.card)
         old_card = self.card
         self.card = None
         
-        for w in self.winfo_children(): 
+        for w in self.winfo_children():
             w.destroy()
         
         self._label = tk.Label(self, text="Empty", bg="#0d3a26", fg=C_TEXT_DIM, font=("Arial", 9))
         self._label.pack(expand=True)
-        
-        # Force immediate refresh after card removal
-        self.after(1, self._app.force_refresh)
+
+        # Immediate refresh
+        self._app.force_refresh()
+
+    def highlight(self, on: bool):
+        if on:
+            self.config(highlightbackground="#fbbf24", highlightthickness=3)
+        else:
+            self.config(highlightbackground=C_BORDER, highlightthickness=1)
 
 class PlayerToggle(tk.Frame):
     """Clickable player icon that can be toggled on/off."""
@@ -196,6 +214,8 @@ class PlayerToggle(tk.Frame):
         
         # Update game state
         self._app.update_active_players()
+        # Immediate refresh to show toggles/analysis updating instantly
+        self._app.force_refresh()
         
     def _on_enter(self, event):
         self.config(cursor="hand2")
@@ -215,126 +235,55 @@ class PlayerToggle(tk.Frame):
         if self._is_active != active:
             self._toggle()
 
-# ──────────────────────────────────────────────────────
-#  Enhanced Table Visualization
-# ──────────────────────────────────────────────────────
 class TableVisualization(tk.Canvas):
-    """
-    Enhanced table visualization with proper dealer/blind positioning.
-    """
-    def __init__(self, parent, app, width: int = 420, height: int = 280):
-        super().__init__(parent, width=width, height=height, bg=C_PANEL, highlightthickness=0)
-        self.W, self.H = width, height
+    """Visual representation of the poker table."""
+    def __init__(self, master, app, **kwargs):
+        defaults = {"width": 400, "height": 250, "bg": C_TABLE, "highlightthickness": 0}
+        defaults.update(kwargs)
+        super().__init__(master, **defaults)
         self._app = weakref.proxy(app)
-        # Runtime info
-        self._pot = 0.0
-        self._to_call = 0.0
-        self._stage = "Pre-flop"
-        self._hero_equity: Optional[float] = None
         self._draw_table()
-
-    def update_info(self, pot: float, to_call: float, stage: str, equity: Optional[float]):
-        self._pot, self._to_call, self._stage, self._hero_equity = pot, to_call, stage, equity
-        self._draw_table()
-
-    def move_hero_clockwise(self):
-        self._app.hero_seat.set((self._app.hero_seat.get() % self._app.num_players.get()) + 1)
-        self._app.force_refresh()
-
-    def move_hero_counter_clockwise(self):
-        current = self._app.hero_seat.get()
-        new_seat = current - 1 if current > 1 else self._app.num_players.get()
-        self._app.hero_seat.set(new_seat)
-        self._app.force_refresh()
-
+        
     def _draw_table(self):
-        self.delete("all")
-        cx, cy = self.W // 2, self.H // 2
-        rx, ry = int(self.W * 0.32), int(self.H * 0.25)
-
-        # Table design
-        self.create_oval(cx - rx, cy - ry, cx + rx, cy + ry,
-                         fill="#0a2e1f", outline="#2a7a4f", width=4)
-        self.create_oval(cx - rx + 8, cy - ry + 8, cx + rx - 8, cy + ry - 8,
-                         fill="#0d3a26", outline="#1a5f3f", width=2)
-        self.create_oval(cx - rx + 15, cy - ry + 15, cx + rx - 15, cy + ry - 15,
-                         fill="", outline="#2a7a4f", width=1)
-
-        # Center information
-        txt = f"POT: ${self._pot:.2f}\nTO CALL: ${self._to_call:.2f}\n{self._stage.upper()}"
-        if self._hero_equity is not None:
-            txt += f"\nEQUITY: {self._hero_equity*100:4.1f}%"
-        self.create_text(cx, cy, text=txt, fill="white",
-                         font=("Consolas", 11, "bold"), justify="center")
-
-        # Draw seats
-        num_players = self._app.num_players.get()
-        active_players = set(self._app.game_state.players_in_hand) if self._app.game_state.is_active else set(range(1, num_players + 1))
+        """Draw the basic table layout."""
+        w, h = 400, 250
         
-        hero_seat = self._app.hero_seat.get()
-        dealer_seat = int(self._app.dealer_seat.get()[1])
+        # Table oval
+        table_x1, table_y1, table_x2, table_y2 = 50, 50, 350, 200
+        self.create_oval(table_x1, table_y1, table_x2, table_y2, 
+                        fill="#0d3a26", outline="#2a7f5f", width=3)
         
-        # Calculate SB and BB positions
-        active_list = sorted(list(active_players))
-        if active_list and dealer_seat in active_list:
-            dealer_idx = active_list.index(dealer_seat)
-            sb_seat = active_list[(dealer_idx + 1) % len(active_list)]
-            bb_seat = active_list[(dealer_idx + 2) % len(active_list)] if len(active_list) > 2 else active_list[(dealer_idx + 1) % len(active_list)]
-        else:
-            sb_seat = (dealer_seat % num_players) + 1
-            bb_seat = (sb_seat % num_players) + 1
+        # Center area for pot
+        center_x, center_y = w // 2, h // 2
+        self.create_oval(center_x - 40, center_y - 20, center_x + 40, center_y + 20,
+                        fill="#1a5f3f", outline="", width=0)
+        
+        # Pot text placeholder
+        self.pot_text = self.create_text(center_x, center_y, text="POT: $0",
+                                       font=("Arial", 12, "bold"), fill=C_TEXT)
+        
+        # Stage indicator
+        self.stage_text = self.create_text(center_x, 25, text="Pre-flop",
+                                         font=("Arial", 10), fill=C_TEXT_DIM)
+        
+        # Info area
+        self.info_text = self.create_text(center_x, h - 25, text="",
+                                        font=("Arial", 9), fill=C_TEXT_DIM)
+        
+    def update_info(self, pot: float, to_call: float, stage: str, equity: Optional[float] = None):
+        """Update the table visualization with current game info."""
+        # Update pot
+        self.itemconfig(self.pot_text, text=f"POT: ${pot:.2f}")
+        
+        # Update stage
+        self.itemconfig(self.stage_text, text=stage)
+        
+        # Update info
+        info_parts = [f"To Call: ${to_call:.2f}"]
+        if equity is not None:
+            info_parts.append(f"Equity: {equity:.1f}%")
+        self.itemconfig(self.info_text, text=" • ".join(info_parts))
 
-        for seat_num in range(1, num_players + 1):
-            angle = ((seat_num - 1) * 2 * math.pi / num_players) - (math.pi / 2)
-            px, py = cx + int(rx * 1.35 * math.cos(angle)), cy + int(ry * 1.35 * math.sin(angle))
-
-            is_hero = seat_num == hero_seat
-            is_dealer = seat_num == dealer_seat
-            in_hand = seat_num in active_players
-
-            if not in_hand:
-                continue
-
-            radius = 26 if is_hero else 22
-            
-            if is_hero:
-                fill, outline, text_c = C_HERO, "#1e40af", "white"
-                label, weight = "YOU", "bold"
-                self.create_oval(px - radius - 3, py - radius - 3, px + radius + 3, py + radius + 3,
-                               fill="", outline=C_HERO_HOVER, width=2)
-            else:
-                fill, outline, text_c = (C_BTN_DARK, C_BORDER, "white")
-                label, weight = f"P{seat_num}", "normal"
-
-            self.create_oval(px - radius, py - radius, px + radius, py + radius,
-                            fill=fill, outline=outline, width=3 if is_hero else 1)
-            self.create_text(px, py, text=label, font=("Arial", 11 if is_hero else 10, weight), fill=text_c)
-
-            # Dealer button
-            if is_dealer and len(active_list) > 1:
-                dealer_distance = 0.6
-                dx = cx + int((px - cx) * dealer_distance)
-                dy = cy + int((py - cy) * dealer_distance)
-                
-                self.create_oval(dx - 14, dy - 14, dx + 14, dy + 14,
-                               fill="#8B6914", outline="", width=0)
-                self.create_oval(dx - 12, dy - 12, dx + 12, dy + 12,
-                               fill=C_DEALER_PRIMARY, outline=C_DEALER_BORDER, width=2)
-                self.create_text(dx, dy, text="D", font=("Arial", 12, "bold"), fill="black")
-
-            # Blinds
-            if seat_num == sb_seat and len(active_list) > 1:
-                self.create_rectangle(px - 15, py + radius + 12, px + 15, py + radius + 28,
-                                    fill=C_BTN_INFO, outline="#1e40af", width=2)
-                self.create_text(px, py + radius + 20, text="SB", font=("Arial", 9, "bold"), fill="white")
-            elif seat_num == bb_seat and len(active_list) > 2:
-                self.create_rectangle(px - 15, py + radius + 12, px + 15, py + radius + 28,
-                                    fill="#dc2626", outline="#991b1b", width=2)
-                self.create_text(px, py + radius + 20, text="BB", font=("Arial", 9, "bold"), fill="white")
-
-# ──────────────────────────────────────────────────────
-#  Main application window
-# ──────────────────────────────────────────────────────
 class PokerAssistant(tk.Tk):
     FONT_HEADER = ("Arial", 13, "bold")
     FONT_SUBHEADER = ("Arial", 11, "bold")
@@ -378,6 +327,10 @@ class PokerAssistant(tk.Tk):
         self._build_gui()
         self.update_active_players()
 
+        # Keyboard shortcuts for quick card input
+        self._key_entry_buffer = ""
+        self.bind_all("<Key>", self._handle_keypress)
+
     def force_refresh(self):
         """Force an immediate refresh of the entire UI."""
         self.refresh()
@@ -406,21 +359,38 @@ class PokerAssistant(tk.Tk):
         header.pack(fill="x", pady=(10, 5), padx=10)
         tk.Label(header, text="🃏 CARD DECK", font=("Arial", 12, "bold"),
                  bg=C_PANEL, fg=C_TEXT).pack(side="left")
-        tk.Label(header, text="Click cards to select →", font=("Arial", 9),
+        tk.Label(header, text="Click cards or use A-S for 2♠ etc", font=("Arial", 9),
                  bg=C_PANEL, fg=C_TEXT_DIM).pack(side="right")
-        
+
         card_container = tk.Frame(parent, bg=C_PANEL)
         card_container.pack(fill="x", expand=False, padx=10)
 
+        # --- Improved: Large suit highlighting ---
         for suit in [Suit.SPADE, Suit.HEART, Suit.DIAMOND, Suit.CLUB]:
-            sf = tk.LabelFrame(card_container, text=f" {suit.value} ",
-                               fg=suit.color if suit.color == "red" else C_TEXT,
-                               bg=C_PANEL, font=("Arial", 10, "bold"),
-                               bd=1, relief="groove", labelanchor="w", padx=5, pady=5)
-            sf.pack(fill="x", pady=3)
-            rows = tk.Frame(sf, bg=C_PANEL)
-            rows.pack()
-            r1, r2 = tk.Frame(rows, bg=C_PANEL), tk.Frame(rows, bg=C_PANEL)
+            suit_frame = tk.Frame(card_container, bg=C_PANEL)
+            suit_frame.pack(fill="x", pady=3)
+            # Large icon
+            suit_color = SUIT_COLORS[suit.color]
+            symbol = suit.value
+            icon_lbl = tk.Label(suit_frame, text=symbol, font=("Arial", 32, "bold"),
+                                fg=suit_color, bg=C_PANEL)
+            icon_lbl.pack(side="left", padx=(0, 10))
+
+            # Suit label (text)
+            suit_lbl = tk.Label(suit_frame, text=suit.name.capitalize(),
+                                font=("Arial", 12, "bold"),
+                                fg=suit_color, bg=C_PANEL)
+            suit_lbl.pack(side="left")
+
+            # Card row in a subframe with colored border
+            border_color = suit_color
+            card_border = tk.Frame(suit_frame, bg=border_color, bd=2)
+            card_border.pack(side="left", padx=(15, 0), fill="x")
+            card_inner = tk.Frame(card_border, bg=C_PANEL)
+            card_inner.pack()
+
+            r1 = tk.Frame(card_inner, bg=C_PANEL)
+            r2 = tk.Frame(card_inner, bg=C_PANEL)
             r1.pack()
             r2.pack(pady=(3, 0))
             for i, r_val in enumerate(RANK_ORDER):
@@ -430,124 +400,81 @@ class PokerAssistant(tk.Tk):
                 self.grid_cards[str(card)] = w
 
     def _build_table_view(self, parent):
-        tf = tk.LabelFrame(parent, text=" 🎯 POKER TABLE ", bg=C_PANEL, fg=C_TEXT,
-                           font=("Arial", 11, "bold"), bd=2, relief="groove")
-        tf.pack(fill="x", padx=10, pady=15)
+        """Build the table visualization panel."""
+        table_frame = tk.LabelFrame(parent, text=" 🎰 TABLE VIEW ", bg=C_PANEL, fg=C_TEXT,
+                                   font=self.FONT_SUBHEADER, bd=2, relief="groove")
+        table_frame.pack(fill="x", padx=10, pady=(10, 0))
         
-        self.table_viz = TableVisualization(tf, self)
-        self.table_viz.pack(pady=10)
-        
-        controls_frame = tk.Frame(tf, bg=C_PANEL)
-        controls_frame.pack(pady=(5, 15))
-        
-        # Hero position controls
-        hero_frame = tk.Frame(controls_frame, bg=C_PANEL)
-        hero_frame.pack(side="left", padx=(0, 20))
-        
-        StyledButton(hero_frame, text="⟲", color=C_BTN_INFO, hover_color=C_BTN_INFO_HOVER,
-                     command=self.table_viz.move_hero_counter_clockwise,
-                     width=3, font=("Arial", 11, "bold")).pack(side="left", padx=2)
-        tk.Label(hero_frame, text="Move YOU", bg=C_PANEL, fg=C_TEXT, 
-                font=("Arial", 10)).pack(side="left", padx=8)
-        StyledButton(hero_frame, text="⟳", color=C_BTN_INFO, hover_color=C_BTN_INFO_HOVER,
-                     command=self.table_viz.move_hero_clockwise,
-                     width=3, font=("Arial", 11, "bold")).pack(side="left", padx=2)
-        
-        # Dealer position dropdown
-        dealer_frame = tk.Frame(controls_frame, bg=C_PANEL)
-        dealer_frame.pack(side="left")
-        tk.Label(dealer_frame, text="Dealer:", bg=C_PANEL, fg=C_TEXT,
-                font=("Arial", 10, "bold")).pack(side="left", padx=(0, 5))
-        self.dealer_menu = ttk.Combobox(dealer_frame, textvariable=self.dealer_seat, width=5,
-                                  values=[f"S{i}" for i in range(1, 10)], font=("Arial", 10))
-        self.dealer_menu.pack(side="left")
-        self.dealer_menu.bind("<<ComboboxSelected>>", lambda e: self.force_refresh())
+        self.table_viz = TableVisualization(table_frame, self)
+        self.table_viz.pack(padx=10, pady=10)
 
     def _build_table_area(self, parent):
         """Build the table configuration area."""
-        tf = tk.LabelFrame(parent, text=" ⚙️ TABLE SETUP ", bg=C_BG, fg=C_TEXT,
+        tf = tk.LabelFrame(parent, text=" 🪑 TABLE SETUP ", bg=C_BG, fg=C_TEXT,
                           font=self.FONT_HEADER, bd=2, relief="groove")
         tf.pack(fill="x", pady=(0, 15))
+
+        # First row: Position and Stack
+        row1 = tk.Frame(tf, bg=C_BG)
+        row1.pack(fill="x", padx=15, pady=(10, 5))
+
+        # Position selection
+        pos_frame = tk.Frame(row1, bg=C_BG)
+        pos_frame.pack(side="left", padx=(0, 30))
+        tk.Label(pos_frame, text="Position:", bg=C_BG, fg=C_TEXT,
+                font=self.FONT_SMALL_LABEL).pack(side="left", padx=(0, 5))
         
-        settings = tk.Frame(tf, bg=C_BG)
-        settings.pack(fill="x", padx=15, pady=15)
-        
-        # Position
-        pos_frame = tk.Frame(settings, bg=C_BG)
-        pos_frame.pack(side="left", fill="y", padx=(0, 20))
-        tk.Label(pos_frame, text="Position", bg=C_BG, fg=C_TEXT, 
-                font=self.FONT_SUBHEADER).pack(anchor="w")
-        pos_menu = ttk.Combobox(pos_frame, textvariable=self.position, width=8,
-                               values=[p.name for p in Position], font=("Arial", 10))
-        pos_menu.pack(pady=5)
-        pos_menu.bind("<<ComboboxSelected>>", lambda e: self.force_refresh())
-        
+        positions = [("UTG", Position.UTG.name), ("MP", Position.MP.name),
+                    ("CO", Position.CO.name), ("BTN", Position.BTN.name),
+                    ("SB", Position.SB.name), ("BB", Position.BB.name)]
+        for text, val in positions:
+            rb = tk.Radiobutton(pos_frame, text=text, variable=self.position, value=val,
+                               bg=C_BG, fg=C_TEXT, selectcolor=C_BTN_DARK,
+                               activebackground=C_BG, activeforeground=C_TEXT,
+                               command=self.refresh)
+            rb.pack(side="left", padx=2)
+
         # Stack size
-        stack_frame = tk.Frame(settings, bg=C_BG)
-        stack_frame.pack(side="left", fill="y", padx=(0, 20))
-        tk.Label(stack_frame, text="Stack Size", bg=C_BG, fg=C_TEXT,
-                font=self.FONT_SUBHEADER).pack(anchor="w")
-        stack_menu = ttk.Combobox(stack_frame, textvariable=self.stack_type, width=15,
-                                 values=[s.value for s in StackType], font=("Arial", 10))
-        stack_menu.pack(pady=5)
-        stack_menu.bind("<<ComboboxSelected>>", lambda e: self.force_refresh())
+        stack_frame = tk.Frame(row1, bg=C_BG)
+        stack_frame.pack(side="left")
+        tk.Label(stack_frame, text="Stack:", bg=C_BG, fg=C_TEXT,
+                font=self.FONT_SMALL_LABEL).pack(side="left", padx=(0, 5))
         
-        # Blinds
-        blinds_frame = tk.Frame(settings, bg=C_BG)
-        blinds_frame.pack(side="left", fill="y", padx=(0, 20))
-        tk.Label(blinds_frame, text="Blinds", bg=C_BG, fg=C_TEXT,
-                font=self.FONT_SUBHEADER).pack(anchor="w")
-        blinds_inner = tk.Frame(blinds_frame, bg=C_BG)
-        blinds_inner.pack(pady=5)
-        tk.Label(blinds_inner, text="SB:", bg=C_BG, fg=C_TEXT, font=("Arial", 10, "bold")).pack(side="left")
-        sb_entry = tk.Entry(blinds_inner, textvariable=self.small_blind, width=5, **self.STYLE_ENTRY)
-        sb_entry.pack(side="left", padx=(5, 10))
-        sb_entry.bind("<KeyRelease>", lambda e: self.force_refresh())
-        tk.Label(blinds_inner, text="BB:", bg=C_BG, fg=C_TEXT, font=("Arial", 10, "bold")).pack(side="left")
-        bb_entry = tk.Entry(blinds_inner, textvariable=self.big_blind, width=5, **self.STYLE_ENTRY)
-        bb_entry.pack(side="left", padx=5)
-        bb_entry.bind("<KeyRelease>", lambda e: self.force_refresh())
-        
-        # Players
-        players_frame = tk.Frame(settings, bg=C_BG)
-        players_frame.pack(side="left", fill="y")
-        tk.Label(players_frame, text="Players", bg=C_BG, fg=C_TEXT,
-                font=self.FONT_SUBHEADER).pack(anchor="w")
-        players_inner = tk.Frame(players_frame, bg=C_BG)
-        players_inner.pack(pady=5)
-        players_scale = tk.Scale(players_inner, from_=2, to=9, orient="horizontal",
-                               variable=self.num_players, bg=C_BG, fg=C_TEXT,
-                               highlightthickness=0, bd=0, length=120, font=("Arial", 10),
-                               command=self._on_players_changed)
-        players_scale.pack(side="left")
-        
-    def _on_players_changed(self, value):
-        """Update when number of players changes."""
-        num = int(value)
-        self.dealer_menu['values'] = [f"S{i}" for i in range(1, num + 1)]
-        
-        current_dealer = int(self.dealer_seat.get()[1])
-        if current_dealer > num:
-            self.dealer_seat.set("S1")
-        
-        if self.hero_seat.get() > num:
-            self.hero_seat.set(1)
-        
+        stacks = [("Short", StackType.SHORT.value), ("Medium", StackType.MEDIUM.value),
+                 ("Deep", StackType.DEEP.value)]
+        for text, val in stacks:
+            rb = tk.Radiobutton(stack_frame, text=text, variable=self.stack_type, value=val,
+                               bg=C_BG, fg=C_TEXT, selectcolor=C_BTN_DARK,
+                               activebackground=C_BG, activeforeground=C_TEXT,
+                               command=self.refresh)
+            rb.pack(side="left", padx=2)
+
+        # Second row: Players
+        row2 = tk.Frame(tf, bg=C_BG)
+        row2.pack(fill="x", padx=15, pady=10)
+
+        tk.Label(row2, text="Active Players:", bg=C_BG, fg=C_TEXT,
+                font=self.FONT_SMALL_LABEL).pack(side="left", padx=(0, 10))
+
+        # Player toggles
         for i in range(1, 10):
-            if i in self.player_toggles:
-                if i <= num:
-                    self.player_toggles[i].grid()
-                else:
-                    self.player_toggles[i].grid_remove()
-                    
-        self.update_active_players()
-        
+            toggle = PlayerToggle(row2, i, self, bg=C_BG)
+            toggle.pack(side="left", padx=3)
+            self.player_toggles[i] = toggle
+
     def _build_control_panel(self, parent):
         """Build the game control panel."""
         cf = tk.LabelFrame(parent, text=" 🎮 GAME CONTROLS ", bg=C_BG, fg=C_TEXT,
                           font=self.FONT_HEADER, bd=2, relief="groove")
         cf.pack(fill="x", pady=(0, 15))
-        
+
+        # --- New: Clear all cards button
+        clear_btn = StyledButton(
+            cf, text="🧹 Clear All Cards", color=C_BTN_INFO, hover_color=C_BTN_INFO_HOVER,
+            command=self._reset_cards_only, font=("Arial", 10, "bold")
+        )
+        clear_btn.pack(pady=5, anchor="w", padx=15)
+
         # Card slots
         slots = tk.Frame(cf, bg=C_BG)
         slots.pack(fill="x", padx=15, pady=15)
@@ -574,198 +501,227 @@ class PokerAssistant(tk.Tk):
         self.board = [CardSlot(board_slots, f"Card {i+1}", self, "board") for i in range(5)]
         for slot in self.board:
             slot.pack(side="left", padx=3)
-            
-        # Game state controls
-        state_frame = tk.Frame(cf, bg=C_BG)
-        state_frame.pack(fill="x", padx=15, pady=(0, 15))
+
+        # Betting controls
+        bet_frame = tk.Frame(cf, bg=C_BG)
+        bet_frame.pack(fill="x", padx=15, pady=(0, 15))
+
+        # Blinds
+        blinds_frame = tk.Frame(bet_frame, bg=C_BG)
+        blinds_frame.pack(side="left", padx=(0, 30))
         
-        # First row: Pot and To Call
-        row1 = tk.Frame(state_frame, bg=C_BG)
-        row1.pack(fill="x", pady=(0, 10))
+        sb_frame = tk.Frame(blinds_frame, bg=C_BG)
+        sb_frame.pack(side="left", padx=(0, 15))
+        tk.Label(sb_frame, text="Small Blind:", bg=C_BG, fg=C_TEXT,
+                font=self.FONT_SMALL_LABEL).pack()
+        sb_entry = tk.Entry(sb_frame, textvariable=self.small_blind, width=8, **self.STYLE_ENTRY)
+        sb_entry.pack()
+
+        bb_frame = tk.Frame(blinds_frame, bg=C_BG)
+        bb_frame.pack(side="left")
+        tk.Label(bb_frame, text="Big Blind:", bg=C_BG, fg=C_TEXT,
+                font=self.FONT_SMALL_LABEL).pack()
+        bb_entry = tk.Entry(bb_frame, textvariable=self.big_blind, width=8, **self.STYLE_ENTRY)
+        bb_entry.pack()
+
+        # Pot and To Call
+        pot_frame = tk.Frame(bet_frame, bg=C_BG)
+        pot_frame.pack(side="left")
         
-        pot_frame = tk.Frame(row1, bg=C_BG)
-        pot_frame.pack(side="left", padx=(0, 25))
-        tk.Label(pot_frame, text="💰 Current Pot", bg=C_BG, fg=C_TEXT,
-                font=self.FONT_SUBHEADER).pack(anchor="w")
         pot_inner = tk.Frame(pot_frame, bg=C_BG)
-        pot_inner.pack(pady=5)
-        tk.Label(pot_inner, text="$", bg=C_BG, fg=C_TEXT, font=("Arial", 12, "bold")).pack(side="left")
+        pot_inner.pack(side="left", padx=(0, 15))
+        tk.Label(pot_inner, text="Current Pot:", bg=C_BG, fg=C_TEXT,
+                font=self.FONT_SMALL_LABEL).pack()
         self.pot_entry = tk.Entry(pot_inner, width=10, **self.STYLE_ENTRY)
-        self.pot_entry.insert(0, str(self.small_blind.get() + self.big_blind.get()))
-        self.pot_entry.pack(side="left", padx=5)
-        self.pot_entry.bind("<KeyRelease>", lambda e: self._update_game_state())
-        
-        call_frame = tk.Frame(row1, bg=C_BG)
-        call_frame.pack(side="left", padx=(0, 25))
-        tk.Label(call_frame, text="💸 To Call", bg=C_BG, fg=C_TEXT,
-                font=self.FONT_SUBHEADER).pack(anchor="w")
-        call_inner = tk.Frame(call_frame, bg=C_BG)
-        call_inner.pack(pady=5)
-        tk.Label(call_inner, text="$", bg=C_BG, fg=C_TEXT, font=("Arial", 12, "bold")).pack(side="left")
+        self.pot_entry.pack()
+
+        call_inner = tk.Frame(pot_frame, bg=C_BG)
+        call_inner.pack(side="left")
+        tk.Label(call_inner, text="To Call:", bg=C_BG, fg=C_TEXT,
+                font=self.FONT_SMALL_LABEL).pack()
         self.call_entry = tk.Entry(call_inner, width=10, **self.STYLE_ENTRY)
-        self.call_entry.insert(0, str(self.big_blind.get()))
-        self.call_entry.pack(side="left", padx=5)
-        self.call_entry.bind("<KeyRelease>", lambda e: self._update_game_state())
-        
-        # Second row: Player toggles
-        row2 = tk.Frame(state_frame, bg=C_BG)
-        row2.pack(fill="x")
-        
-        tk.Label(row2, text="👥 Active Players (click to toggle):", bg=C_BG, fg=C_TEXT,
-                font=self.FONT_SUBHEADER).pack(anchor="w", pady=(0, 5))
-        
-        players_grid = tk.Frame(row2, bg=C_BG)
-        players_grid.pack(fill="x")
-        
-        # Create player toggles
-        for i in range(1, 10):
-            row = (i - 1) // 3
-            col = (i - 1) % 3
-            toggle = PlayerToggle(players_grid, i, self, bg=C_BG)
-            toggle.grid(row=row, column=col, padx=5, pady=5)
-            self.player_toggles[i] = toggle
-            if i > self.num_players.get():
-                toggle.grid_remove()
-        
+        self.call_entry.pack()
+
     def _build_action_panel(self, parent):
-        """Build the action panel."""
-        af = tk.LabelFrame(parent, text=" 🎯 ACTIONS & DECISIONS ", bg=C_BG, fg=C_TEXT,
+        """Build the action panel with decision tracking."""
+        af = tk.LabelFrame(parent, text=" 🎯 ACTIONS ", bg=C_BG, fg=C_TEXT,
                           font=self.FONT_HEADER, bd=2, relief="groove")
         af.pack(fill="x", pady=(0, 15))
-        
-        decision_frame = tk.Frame(af, bg=C_BG)
-        decision_frame.pack(fill="x", padx=15, pady=(15, 10))
-        tk.Label(decision_frame, text="🧠 Recommended Action:", bg=C_BG, fg=C_TEXT,
+
+        # Decision display
+        dec_frame = tk.Frame(af, bg=C_BG)
+        dec_frame.pack(fill="x", padx=15, pady=(10, 5))
+        tk.Label(dec_frame, text="Recommended Action:", bg=C_BG, fg=C_TEXT,
                 font=self.FONT_SUBHEADER).pack(side="left")
-        self.decision_label = tk.Label(decision_frame, text="→ Add 2 hole cards to begin...", bg=C_BG, fg=C_TEXT_DIM,
-                                     font=("Arial", 14, "bold"))
-        self.decision_label.pack(side="left", padx=15)
-        
+        self.decision_label = tk.Label(dec_frame, text="→ Add 2 hole cards to begin...",
+                                      bg=C_BG, fg=C_TEXT_DIM,
+                                      font=("Arial", 12, "bold"))
+        self.decision_label.pack(side="left", padx=(10, 0))
+
+        # Action buttons
         btn_frame = tk.Frame(af, bg=C_BG)
-        btn_frame.pack(fill="x", padx=15, pady=(0, 15))
-        
-        fold_btn = StyledButton(btn_frame, text="❌ Fold", color=C_BTN_DANGER,
-                               hover_color=C_BTN_DANGER_HOVER, command=lambda: self._record_action("FOLD"),
-                               font=("Arial", 10, "bold"), padx=20, pady=8)
-        fold_btn.pack(side="left", padx=(0, 10))
-        
-        call_btn = StyledButton(btn_frame, text="✅ Call", color=C_BTN_SUCCESS,
-                               hover_color=C_BTN_SUCCESS_HOVER, command=lambda: self._record_action("CALL"),
-                               font=("Arial", 10, "bold"), padx=20, pady=8)
-        call_btn.pack(side="left", padx=(0, 10))
-        
-        raise_btn = StyledButton(btn_frame, text="⬆️ Raise", color=C_BTN_WARNING,
-                                hover_color=C_BTN_WARNING_HOVER, command=lambda: self._record_action("RAISE"),
-                                font=("Arial", 10, "bold"), padx=20, pady=8)
-        raise_btn.pack(side="left")
-        
-        reset_btn = StyledButton(btn_frame, text="🔄 Reset Table", color=C_BTN_DARK,
-                                hover_color=C_BTN_DARK_HOVER, command=self._reset_table,
-                                font=("Arial", 10, "bold"))
-        reset_btn.pack(side="right")
-        
+        btn_frame.pack(fill="x", padx=15, pady=(5, 15))
+
+        actions = [
+            ("💰 RAISE", C_BTN_WARNING, C_BTN_WARNING_HOVER, PlayerAction.RAISE),
+            ("📞 CALL", C_BTN_SUCCESS, C_BTN_SUCCESS_HOVER, PlayerAction.CALL),
+            ("❌ FOLD", C_BTN_DANGER, C_BTN_DANGER_HOVER, PlayerAction.FOLD),
+            ("✔️ CHECK", C_BTN_INFO, C_BTN_INFO_HOVER, PlayerAction.CHECK)
+        ]
+
+        for text, color, hover, action in actions:
+            btn = StyledButton(btn_frame, text=text, color=color, hover_color=hover,
+                             command=lambda a=action: self._record_action(a))
+            btn.pack(side="left", padx=5)
+
+        # Start new hand button
+        new_hand_btn = StyledButton(btn_frame, text="🔄 New Hand", 
+                                   color=C_BTN_DARK, hover_color=C_BTN_DARK_HOVER,
+                                   command=self._reset_hand)
+        new_hand_btn.pack(side="right", padx=(20, 0))
+
     def _build_analysis_area(self, parent):
-        """Build the analysis output area."""
-        af = tk.LabelFrame(parent, text=" 📊 ANALYSIS & STATISTICS ", bg=C_BG, fg=C_TEXT,
-                          font=self.FONT_HEADER, bd=2, relief="groove")
-        af.pack(fill="both", expand=True)
-        
+        """Build the analysis display area."""
+        self.analysis_frame = tk.LabelFrame(parent, text=" 📊 HAND ANALYSIS ", 
+                                           bg=C_BG, fg=C_TEXT,
+                                           font=self.FONT_HEADER, bd=2, relief="groove")
+        self.analysis_frame.pack(fill="both", expand=True)
+
+        # Create text widget for analysis
+        self.analysis_text = tk.Text(self.analysis_frame, bg=C_PANEL, fg=C_TEXT,
+                                    font=self.FONT_BODY, wrap="word", height=10,
+                                    bd=0, padx=15, pady=15)
+        self.analysis_text.pack(fill="both", expand=True, padx=2, pady=2)
+
         # Stats panel
-        stats_frame = tk.Frame(af, bg=C_BG, width=220)
-        stats_frame.pack(side="left", fill="y", padx=(15, 0), pady=15)
-        stats_frame.pack_propagate(False)
-        tk.Label(stats_frame, text="📈 GAME STATISTICS", bg=C_BG, fg=C_TEXT,
-                font=self.FONT_SUBHEADER).pack(anchor="w", pady=(0, 8))
-        self.stats_text = tk.Text(stats_frame, width=28, height=22, bg=C_PANEL, fg=C_TEXT,
-                                 font=self.FONT_BODY, wrap="word", padx=12, pady=12,
-                                 bd=1, relief="solid")
-        self.stats_text.pack(fill="both", expand=True)
-        
-        # Output panel
-        output_frame = tk.Frame(af, bg=C_BG)
-        output_frame.pack(side="left", fill="both", expand=True, padx=15, pady=15)
-        tk.Label(output_frame, text="🃏 DETAILED HAND ANALYSIS", bg=C_BG, fg=C_TEXT,
-                font=self.FONT_SUBHEADER).pack(anchor="w", pady=(0, 8))
-        self.out_body = tk.Text(output_frame, bg=C_PANEL, fg=C_TEXT,
-                               font=self.FONT_BODY, wrap="word", padx=15, pady=15,
-                               bd=1, relief="solid")
-        self.out_body.pack(fill="both", expand=True)
-        
-        # Configure text tags
-        for widget in (self.out_body, self.stats_text):
-            widget.tag_configure("header", font=("Consolas", 11, "bold"), foreground="#10b981")
-            widget.tag_configure("subheader", font=("Consolas", 10, "bold"), foreground="#10b981")
-            widget.tag_configure("dim", foreground=C_TEXT_DIM)
-            widget.tag_configure("positive", foreground="#10b981", font=("Consolas", 10, "bold"))
-            widget.tag_configure("negative", foreground="#ef4444", font=("Consolas", 10, "bold"))
-            widget.tag_configure("warning", foreground="#f59e0b", font=("Consolas", 10, "bold"))
-            
+        self.stats_frame = tk.LabelFrame(parent, text=" 📈 SESSION STATS ", 
+                                        bg=C_BG, fg=C_TEXT,
+                                        font=self.FONT_HEADER, bd=2, relief="groove")
+        self.stats_frame.pack(fill="x", pady=(15, 0))
+
+        self.stats_text = tk.Text(self.stats_frame, bg=C_PANEL, fg=C_TEXT,
+                                 font=self.FONT_BODY, wrap="word", height=3,
+                                 bd=0, padx=15, pady=10)
+        self.stats_text.pack(fill="x", padx=2, pady=2)
+
+    def _reset_cards_only(self):
+        """Only clear all cards, don't touch pot/players."""
+        for slot in self.hole + self.board:
+            slot.clear()
+        self.force_refresh()
+
     def place_card_in_next_slot(self, card: Card):
         """Place a card in the next available slot."""
         # Try hole cards first
         for slot in self.hole:
             if slot.set_card(card):
+                self._highlight_next_slot()
                 return
         
         # Then try board cards
         for slot in self.board:
             if slot.set_card(card):
+                self._highlight_next_slot()
                 return
         
         messagebox.showinfo("No Free Slots", "All card slots are full. Remove a card first.")
-            
+
+    def _highlight_next_slot(self):
+        """Highlight the next available slot for card entry."""
+        candidates = self.hole + self.board
+        found = False
+        for slot in candidates:
+            if not slot.card and not found:
+                slot.highlight(True)
+                found = True
+            else:
+                slot.highlight(False)
+        if not found:
+            for slot in candidates:
+                slot.highlight(False)
+
+    def _handle_keypress(self, event):
+        """Handle keyboard shortcuts for rapid card entry."""
+        key = event.char.upper()
+        # Acceptable rank input
+        valid_ranks = {
+            'A': 'A', 'K': 'K', 'Q': 'Q', 'J': 'J', 'T': 'T',
+            '2': '2', '3': '3', '4': '4', '5': '5', '6': '6',
+            '7': '7', '8': '8', '9': '9'
+        }
+        valid_suits = {'S': Suit.SPADE, 'H': Suit.HEART, 'D': Suit.DIAMOND, 'C': Suit.CLUB}
+
+        if key in valid_ranks:
+            self._key_entry_buffer = key
+        elif key in valid_suits and self._key_entry_buffer:
+            card = Card(self._key_entry_buffer, valid_suits[key])
+            cardstr = str(card)
+            if cardstr in self.grid_cards and not self.grid_cards[cardstr]._is_used:
+                self.place_card_in_next_slot(card)
+            self._key_entry_buffer = ""
+        else:
+            self._key_entry_buffer = ""
+
+    def grey_out(self, card: Card):
+        """Mark a card as used in the grid."""
+        card_str = str(card)
+        if card_str in self.grid_cards:
+            self.grid_cards[card_str].set_used(True)
+            self.used_cards.add(card_str)
+
+    def un_grey(self, card: Card):
+        """Mark a card as available in the grid."""
+        card_str = str(card)
+        if card_str in self.grid_cards:
+            self.grid_cards[card_str].set_used(False)
+            self.used_cards.discard(card_str)
+
     def update_active_players(self):
-        """Update game state with active players from toggles."""
-        active_players = []
-        for i in range(1, self.num_players.get() + 1):
-            if i in self.player_toggles and self.player_toggles[i].is_active():
-                active_players.append(i)
-        
-        self.game_state.is_active = True
-        self.game_state.players_in_hand = active_players
-        self.force_refresh()
+        """Update the number of active players based on toggles."""
+        active_count = sum(1 for toggle in self.player_toggles.values() if toggle.is_active())
+        self.num_players.set(max(2, active_count))  # Minimum 2 players
         
     def _update_game_state(self):
-        """Update the game state based on UI inputs."""
+        """Update game state from UI inputs."""
         try:
-            pot = float(self.pot_entry.get() or 0)
-            to_call = float(self.call_entry.get() or 0)
+            pot_text = self.pot_entry.get().strip()
+            call_text = self.call_entry.get().strip()
             
-            self.game_state.is_active = True
-            self.game_state.pot = pot
-            self.game_state.to_call = to_call
-            
-            self.force_refresh()
+            if pot_text and call_text:
+                self.game_state.is_active = True
+                self.game_state.pot = float(pot_text)
+                self.game_state.to_call = float(call_text)
+            else:
+                self.game_state.is_active = False
+                self.game_state.pot = self.small_blind.get() + self.big_blind.get()
+                self.game_state.to_call = self.big_blind.get()
         except ValueError:
-            pass
-            
-    def _record_action(self, action):
+            self.game_state.is_active = False
+
+    def _record_action(self, action: PlayerAction):
         """Record a player action."""
-        if not self._last_decision_id:
-            messagebox.showinfo("Info", "Please add 2 hole cards first.")
+        if self._last_decision_id is None:
+            messagebox.showwarning("No Analysis", 
+                                 "Add 2 hole cards first to get hand analysis before recording actions.")
             return
-            
-        messagebox.showinfo("Action Recorded", f"You chose to {action}")
         
-    def _reset_table(self):
-        """Reset the table state."""
+        try:
+            record_decision(self._last_decision_id, action.value)
+            messagebox.showinfo("Action Recorded", 
+                              f"Your {action.value} action has been recorded.")
+        except Exception as e:
+            log.error(f"Failed to record action: {e}")
+            messagebox.showerror("Error", f"Failed to record action: {e}")
+
+    def _reset_hand(self):
+        """Reset for a new hand."""
         for slot in self.hole + self.board:
             slot.clear()
-            
-        self.game_state = GameState()
         self.pot_entry.delete(0, tk.END)
-        self.pot_entry.insert(0, str(self.small_blind.get() + self.big_blind.get()))
         self.call_entry.delete(0, tk.END)
-        self.call_entry.insert(0, str(self.big_blind.get()))
-        
-        for toggle in self.player_toggles.values():
-            toggle.set_active(True)
-        
-        self._clear_output_panels()
-        self._display_welcome_message()
-        self.decision_label.config(text="→ Add 2 hole cards to begin...", fg=C_TEXT_DIM)
+        self.game_state = GameState()
         self._last_decision_id = None
-        self.update_active_players()
+        self.refresh()
 
     def refresh(self):
         """Main refresh method that updates everything."""
@@ -773,6 +729,10 @@ class PokerAssistant(tk.Tk):
         board = [s.card for s in self.board if s.card]
 
         self._clear_output_panels()
+        self._update_game_state()
+
+        # Highlight next slot
+        self._highlight_next_slot()
 
         # Determine stage
         stage_lookup = {0: "Pre-flop", 3: "Flop", 4: "Turn", 5: "River"}
@@ -785,9 +745,10 @@ class PokerAssistant(tk.Tk):
             analysis = self._update_analysis_panel(hole, board)
             
             # Update decision label with current recommendation
-            colors = {"RAISE": C_BTN_WARNING, "CALL": C_BTN_SUCCESS, "FOLD": C_BTN_DANGER, "CHECK": C_BTN_INFO}
+            colors = {"RAISE": C_BTN_WARNING, "CALL": C_BTN_SUCCESS, 
+                     "FOLD": C_BTN_DANGER, "CHECK": C_BTN_INFO}
             self.decision_label.config(
-                text=f"→ {analysis.decision}", 
+                text=f"→ {analysis.decision}",
                 fg=colors.get(analysis.decision, C_TEXT)
             )
         else:
@@ -803,133 +764,110 @@ class PokerAssistant(tk.Tk):
         equity = analysis.equity if analysis else None
         self.table_viz.update_info(pot, to_call, stage, equity)
 
-    def grey_out(self, card):
-        """Grey out a card in the deck grid."""
-        card_str = str(card)
-        if card_str in self.grid_cards:
-            self.grid_cards[card_str].set_used(True)
-            self.used_cards.add(card_str)
-    
-    def un_grey(self, card):
-        """Un-grey a card in the deck grid."""
-        card_str = str(card)
-        if card_str in self.grid_cards:
-            self.grid_cards[card_str].set_used(False)
-            if card_str in self.used_cards:
-                self.used_cards.remove(card_str)
-    
     def _clear_output_panels(self):
-        """Clear the output and stats panels."""
-        self.out_body.delete("1.0", "end")
-        self.stats_text.delete("1.0", "end")
-    
+        """Clear all output text widgets."""
+        self.analysis_text.delete("1.0", tk.END)
+        self.stats_text.delete("1.0", tk.END)
+
     def _display_welcome_message(self):
-        """Display welcome message."""
-        self.out_body.insert("end", "🎉 Welcome to Poker Assistant Pro!\n\n", "header")
-        self.out_body.insert("end", "Click cards from the deck to add them to your hand and the board.\n\n", "dim")
-        self.out_body.insert("end", "🎯 QUICK START TIPS:\n", "subheader")
-        self.out_body.insert("end", "• Click cards to place them in the next available slot\n")
-        self.out_body.insert("end", "• Click any placed card to remove it\n")
-        self.out_body.insert("end", "• Toggle players on/off to show who's active\n")
-        self.out_body.insert("end", "• Analysis updates automatically as you add cards\n")
-        self.out_body.insert("end", "• YOU (bright blue) is your position\n")
-        self.out_body.insert("end", "• The dealer button (gold 'D') rotates on the table\n\n")
-        self.out_body.insert("end", "🧠 Add 2 hole cards to see real-time analysis!\n", "positive")
-    
+        """Display welcome message when no cards are selected."""
+        self.analysis_text.insert("1.0", 
+            "Welcome to Poker Assistant v16!\n\n"
+            "• Click cards or use keyboard shortcuts (e.g., AS for A♠)\n"
+            "• Add 2 hole cards to see hand analysis\n"
+            "• Toggle players on/off to adjust table dynamics\n"
+            "• Add community cards to see updated recommendations\n\n"
+            "Ready to improve your game!")
+
+    def _update_analysis_panel(self, hole: List[Card], board: List[Card]) -> HandAnalysis:
+        """Update the analysis panel with hand information."""
+        try:
+            analysis = analyse_hand(
+                hole=hole,
+                board=board,
+                position=Position[self.position.get()],
+                stack_type=StackType(self.stack_type.get()),
+                num_players=self.num_players.get(),
+                to_call=self.game_state.to_call,
+                pot=self.game_state.pot,
+                big_blind=self.big_blind.get()
+            )
+
+            # Store for action recording
+            hand_str = to_two_card_str(hole[0], hole[1])
+            decision_id = open_db().execute(
+                "INSERT INTO decisions (hand, position, decision, timestamp) VALUES (?, ?, ?, datetime('now'))",
+                (hand_str, self.position.get(), analysis.decision)
+            ).lastrowid
+            open_db().commit()
+            self._last_decision_id = decision_id
+
+            # Format analysis display
+            self._format_analysis_display(analysis, hole, board)
+            
+            return analysis
+            
+        except Exception as e:
+            log.error(f"Analysis failed: {e}")
+            self.analysis_text.insert("1.0", f"Analysis Error: {e}")
+            return HandAnalysis()
+
+    def _format_analysis_display(self, analysis: HandAnalysis, hole: List[Card], board: List[Card]):
+        """Format and display the analysis results."""
+        text = self.analysis_text
+        
+        # Hand info
+        hand_str = f"{hole[0]} {hole[1]}"
+        text.insert(tk.END, f"Your Hand: {hand_str}\n")
+        
+        if board:
+            board_str = " ".join(str(c) for c in board)
+            text.insert(tk.END, f"Board: {board_str}\n")
+        
+        text.insert(tk.END, f"Position: {self.position.get()}\n")
+        text.insert(tk.END, f"Players: {self.num_players.get()}\n\n")
+        
+        # Analysis results
+        text.insert(tk.END, f"Hand Tier: {analysis.tier}\n")
+        text.insert(tk.END, f"Playability: {analysis.playability}/10\n")
+        
+        if analysis.equity:
+            text.insert(tk.END, f"Equity: {analysis.equity:.1f}%\n")
+        
+        if analysis.pot_odds:
+            text.insert(tk.END, f"Pot Odds: {analysis.pot_odds:.1f}%\n")
+        
+        text.insert(tk.END, f"\nRecommendation: {analysis.decision}\n\n")
+        
+        # Reasoning
+        if analysis.reasoning:
+            text.insert(tk.END, "Analysis:\n")
+            for reason in analysis.reasoning:
+                text.insert(tk.END, f"• {reason}\n")
+
     def _update_stats_panel(self):
-        """Update the statistics panel."""
-        self.stats_text.delete("1.0", "end")
-        
-        active_players = self.game_state.players_in_hand if self.game_state.is_active else []
-        
-        # Calculate blind positions
-        if active_players:
-            dealer_seat = int(self.dealer_seat.get()[1])
-            if dealer_seat in active_players:
-                dealer_idx = active_players.index(dealer_seat)
-                sb_seat = active_players[(dealer_idx + 1) % len(active_players)]
-                bb_seat = active_players[(dealer_idx + 2) % len(active_players)] if len(active_players) > 2 else active_players[(dealer_idx + 1) % len(active_players)]
+        """Update session statistics."""
+        try:
+            db = open_db()
+            cursor = db.execute(
+                "SELECT decision, COUNT(*) FROM decisions WHERE date(timestamp) = date('now') GROUP BY decision"
+            )
+            stats = dict(cursor.fetchall())
+            
+            total = sum(stats.values())
+            if total > 0:
+                self.stats_text.insert("1.0", f"Today's Decisions ({total} hands):\n")
+                for action in ["FOLD", "CALL", "RAISE", "CHECK"]:
+                    count = stats.get(action, 0)
+                    pct = (count / total * 100) if total > 0 else 0
+                    self.stats_text.insert(tk.END, f"{action}: {count} ({pct:.1f}%)  ")
             else:
-                sb_seat = active_players[0] if len(active_players) > 0 else 1
-                bb_seat = active_players[1] if len(active_players) > 1 else 2
-        else:
-            sb_seat, bb_seat = 1, 2
-        
-        # Game info
-        self.stats_text.insert("end", "🎮 GAME INFO\n", "header")
-        self.stats_text.insert("end", f"Position: {self.position.get()}\n", "dim")
-        self.stats_text.insert("end", f"Stack: {self.stack_type.get()}\n", "dim")
-        self.stats_text.insert("end", f"Blinds: ${self.small_blind.get():.2f}/${self.big_blind.get():.2f}\n", "dim")
-        self.stats_text.insert("end", f"Max Players: {self.num_players.get()}\n", "dim")
-        self.stats_text.insert("end", f"Hero Seat: S{self.hero_seat.get()}\n", "dim")
-        self.stats_text.insert("end", f"Dealer: {self.dealer_seat.get()}\n", "dim")
-        if active_players:
-            self.stats_text.insert("end", f"SB: P{sb_seat} | BB: P{bb_seat}\n\n", "dim")
-        else:
-            self.stats_text.insert("end", "SB: - | BB: -\n\n", "dim")
-        
-        # Game state
-        self.stats_text.insert("end", "🎯 CURRENT STATE\n", "header")
-        if self.game_state.is_active:
-            self.stats_text.insert("end", f"Pot: ${self.game_state.pot:.2f}\n", "dim")
-            self.stats_text.insert("end", f"To Call: ${self.game_state.to_call:.2f}\n", "dim")
-            if active_players:
-                players_str = ", ".join(f"P{p}" for p in sorted(active_players))
-                self.stats_text.insert("end", f"Active: {players_str}\n", "dim")
-                self.stats_text.insert("end", f"Players in hand: {len(active_players)}\n\n", "dim")
-            else:
-                self.stats_text.insert("end", "No active players\n\n", "dim")
-        else:
-            self.stats_text.insert("end", "No active hand\n\n", "dim")
-        
-        # Card counts
-        hole_count = sum(1 for s in self.hole if s.card)
-        board_count = sum(1 for s in self.board if s.card)
-        self.stats_text.insert("end", "🃏 CARDS\n", "header")
-        self.stats_text.insert("end", f"Hand: {hole_count}/2\n", "dim")
-        self.stats_text.insert("end", f"Board: {board_count}/5\n", "dim")
-        
-        # Strategy tips
-        self.stats_text.insert("end", "\n💡 STRATEGY TIPS\n", "header")
-        pos = Position[self.position.get()]
-        advice = get_position_advice(pos)
-        self.stats_text.insert("end", f"{advice}\n", "dim")
+                self.stats_text.insert("1.0", "No decisions recorded today yet.")
+                
+        except Exception as e:
+            log.error(f"Stats update failed: {e}")
+            self.stats_text.insert("1.0", "Stats unavailable")
 
-    def _update_analysis_panel(self, hole, board) -> HandAnalysis:
-        """Update the analysis panel with current hand information."""
-        pos = Position[self.position.get()]
-        stack_bb = StackType(self.stack_type.get()).default_bb
-        pot = self.game_state.pot if self.game_state.is_active else (self.small_blind.get() + self.big_blind.get())
-        to_call = self.game_state.to_call if self.game_state.is_active else self.big_blind.get()
-        num_players_in_hand = len(self.game_state.players_in_hand) if self.game_state.is_active and self.game_state.players_in_hand else self.num_players.get()
-
-        # Get analysis
-        analysis = analyse_hand(hole, board, pos, stack_bb, pot, to_call, num_players_in_hand)
-        tier = get_hand_tier(hole)
-        board_str = ' '.join(map(str, board))
-        
-        # Record decision
-        self._last_decision_id = record_decision(analysis, pos, tier, stack_bb, pot, to_call, board_str)
-
-        # Display analysis
-        self.out_body.insert("end", f"🃏 Hand: {to_two_card_str(hole)} ({tier})\n", "header")
-        self.out_body.insert("end", f"🎯 Board: {board_str or 'Pre-flop'} ({analysis.board_texture})\n", "dim")
-        self.out_body.insert("end", f"📍 Position: {pos.name} | 💰 Pot: ${pot:.2f} | 📊 SPR: {analysis.spr:.1f}\n\n", "dim")
-        
-        self.out_body.insert("end", "💡 STRATEGIC ADVICE\n", "subheader")
-        self.out_body.insert("end", f"{get_position_advice(pos)}\n{get_hand_advice(tier, analysis.board_texture, analysis.spr)}\n\n", "dim")
-        
-        self.out_body.insert("end", "🧠 ANALYSIS REASONING\n", "subheader")
-        self.out_body.insert("end", f"{analysis.reason}\n\n")
-        
-        self.out_body.insert("end", "📊 EQUITY CALCULATION (Monte-Carlo)\n", "subheader")
-        edge = analysis.equity - analysis.required_eq
-        self.out_body.insert("end", f"Your Equity:     {analysis.equity:6.1%}\n")
-        self.out_body.insert("end", f"Required Equity: {analysis.required_eq:6.1%}\n")
-        edge_tag = "positive" if edge >= 0 else "negative"
-        self.out_body.insert("end", f"Edge:           {edge:+6.1%}\n", edge_tag)
-
-        return analysis
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO,
