@@ -424,7 +424,8 @@ class PokerAssistant(tk.Tk):
         tk.Label(pos_frame, text="Position:", bg=C_BG, fg=C_TEXT,
                 font=self.FONT_SMALL_LABEL).pack(side="left", padx=(0, 5))
         
-        positions = [("UTG", Position.UTG.name), ("MP", Position.MP.name),
+        # Fixed: Use MP1 instead of MP
+        positions = [("UTG", Position.UTG.name), ("MP1", Position.MP1.name),
                     ("CO", Position.CO.name), ("BTN", Position.BTN.name),
                     ("SB", Position.SB.name), ("BB", Position.BB.name)]
         for text, val in positions:
