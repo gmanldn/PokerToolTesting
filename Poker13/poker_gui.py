@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Graphical user interface and in-game flow for Poker-Assistant.
-Enhanced version with a much more prominent dealer button and refined presentation.
+Enhanced version with proper dealer button positioning and blind rotation.
 """
 from __future__ import annotations
 import tkinter as tk
@@ -31,7 +31,9 @@ C_BTN_PRIMARY, C_BTN_SUCCESS, C_BTN_DANGER, C_BTN_WARNING, C_BTN_INFO, C_BTN_DAR
 C_BTN_PRIMARY_HOVER, C_BTN_SUCCESS_HOVER, C_BTN_DANGER_HOVER, C_BTN_WARNING_HOVER, C_BTN_INFO_HOVER, C_BTN_DARK_HOVER = \
 "#34d399", "#34d399", "#f87171", "#fbbf24", "#60a5fa", "#4b5563"
 
-# Enhanced dealer button colors
+# Enhanced colors
+C_HERO = "#3b82f6"  # Bright blue for the player
+C_HERO_HOVER = "#60a5fa"  # Lighter blue for hover
 C_DEALER_PRIMARY = "#FFD700"  # Gold
 C_DEALER_SECONDARY = "#FFA500"  # Orange
 C_DEALER_BORDER = "#B8860B"  # Dark golden rod
@@ -111,17 +113,17 @@ class CardSlot(tk.Frame):
 # ──────────────────────────────────────────────────────
 class TableVisualization(tk.Canvas):
     """
-    Enhanced table visualization with a much more prominent dealer button:
-    • Larger canvas (420×280)
-    • Dealer button shown as a GOLD button with "DEALER" text
-    • More distinctive visual hierarchy
-    • Better spacing and proportions
+    Enhanced table visualization with proper dealer/blind positioning:
+    • Seats are always in the same position (S1-S6)
+    • Hero position can be moved with rotate buttons
+    • Dealer button position set by dropdown
+    • SB and BB rotate based on dealer position
+    • Dealer button is on the table surface
     """
     def __init__(self, parent, app, width: int = 420, height: int = 280):
         super().__init__(parent, width=width, height=height, bg=C_PANEL, highlightthickness=0)
         self.W, self.H = width, height
         self._app = weakref.proxy(app)
-        self.table_rotation = 0
         # Runtime info (updated by PokerAssistant.refresh)
         self._pot = 0.0
         self._to_call = 0.0
@@ -134,13 +136,15 @@ class TableVisualization(tk.Canvas):
         self._pot, self._to_call, self._stage, self._hero_equity = pot, to_call, stage, equity
         self._draw_table()
 
-    # Rotation helpers --------------------------------------------------------
-    def rotate_clockwise(self):
-        self.table_rotation = (self.table_rotation - 1) % self._app.num_players.get()
+    # Move hero position ------------------------------------------------------
+    def move_hero_clockwise(self):
+        self._app.hero_seat.set((self._app.hero_seat.get() % self._app.num_players.get()) + 1)
         self._draw_table()
 
-    def rotate_counter_clockwise(self):
-        self.table_rotation = (self.table_rotation + 1) % self._app.num_players.get()
+    def move_hero_counter_clockwise(self):
+        current = self._app.hero_seat.get()
+        new_seat = current - 1 if current > 1 else self._app.num_players.get()
+        self._app.hero_seat.set(new_seat)
         self._draw_table()
 
     # Enhanced drawing method -------------------------------------------------
@@ -164,58 +168,68 @@ class TableVisualization(tk.Canvas):
         self.create_text(cx, cy, text=txt, fill="white",
                          font=("Consolas", 11, "bold"), justify="center")
 
-        # Enhanced players with prominent dealer button -----------------------
+        # Draw seats with fixed positions -------------------------------------
         num_players = self._app.num_players.get()
         active_players = set(self._app.game_state.players_in_hand) if self._app.game_state.is_active else set(range(1, num_players + 1))
         
-        # For testing: make P6 the dealer
-        dealer_seat = 6
+        hero_seat = self._app.hero_seat.get()
+        dealer_seat = int(self._app.dealer_seat.get()[1])  # Extract number from "S1", "S2", etc.
+        
+        # Calculate SB and BB positions based on dealer
+        sb_seat = (dealer_seat % num_players) + 1  # Next seat clockwise from dealer
+        bb_seat = (sb_seat % num_players) + 1      # Next seat clockwise from SB
 
-        for seat in range(1, num_players + 1):
-            visual_pos = (seat - 1 - self.table_rotation) % num_players
-            angle = (visual_pos * 2 * math.pi / num_players) - (math.pi / 2)
+        for seat_num in range(1, num_players + 1):
+            # Calculate fixed position for this seat
+            angle = ((seat_num - 1) * 2 * math.pi / num_players) - (math.pi / 2)
             px, py = cx + int(rx * 1.35 * math.cos(angle)), cy + int(ry * 1.35 * math.sin(angle))
 
-            # Determine if this is the hero - for now, let's say hero is seat 4 (bottom position)
-            is_hero = seat == 4
-            is_dealer = seat == dealer_seat
-            in_hand = seat in active_players
+            is_hero = seat_num == hero_seat
+            is_dealer = seat_num == dealer_seat
+            in_hand = seat_num in active_players
 
             # Draw player circles ----------------------------------------------
             radius = 26 if is_hero else 22
             
             # Determine player styling
-            if is_dealer:
-                # Dealer gets yellow background with black text
-                fill = "#FFD700"  # Gold/yellow
-                outline = "#B8860B"  # Dark golden rod border
-                text_c = "black"
-                label = "YOU" if is_hero else f"P{seat}"
-                weight = "bold"
-                # Add a subtle glow for the dealer
-                self.create_oval(px - radius - 2, py - radius - 2, px + radius + 2, py + radius + 2,
-                               fill="", outline="#FFD700", width=2)
-            elif is_hero:
-                fill, outline, text_c = "#fbbf24", "#f59e0b", "black"
+            if is_hero:
+                # Hero - bright blue (remove dealer gold border if also dealer)
+                fill, outline, text_c = C_HERO, "#1e40af", "white"
                 label, weight = "YOU", "bold"
                 # Hero glow effect
                 self.create_oval(px - radius - 3, py - radius - 3, px + radius + 3, py + radius + 3,
-                               fill="", outline="#fbbf24", width=2)
+                               fill="", outline=C_HERO_HOVER, width=2)
             else:
+                # Regular player
                 fill, outline, text_c = (C_BTN_DARK, C_BORDER, "white") if in_hand else ("#4b5563", "#4b5563", "#aaaaaa")
-                label, weight = f"P{seat}", "normal"
+                label, weight = f"S{seat_num}", "normal"
 
             # Draw the player circle
             self.create_oval(px - radius, py - radius, px + radius, py + radius,
-                            fill=fill, outline=outline, width=3 if (is_hero or is_dealer) else 1)
-            self.create_text(px, py, text=label, font=("Arial", 11 if (is_hero or is_dealer) else 10, weight), fill=text_c)
+                            fill=fill, outline=outline, width=3 if is_hero else 1)
+            self.create_text(px, py, text=label, font=("Arial", 11 if is_hero else 10, weight), fill=text_c)
 
-            # Enhanced blinds labels
-            if seat == Position.SB.value:
+            # Draw dealer button on the table if this seat is dealer
+            if is_dealer:
+                # Calculate position on table between player and center
+                # Place it about 60% of the way from center to player
+                dealer_distance = 0.6
+                dx = cx + int((px - cx) * dealer_distance)
+                dy = cy + int((py - cy) * dealer_distance)
+                
+                # Draw dealer button with shadow effect
+                self.create_oval(dx - 14, dy - 14, dx + 14, dy + 14,
+                               fill="#8B6914", outline="", width=0)  # Shadow
+                self.create_oval(dx - 12, dy - 12, dx + 12, dy + 12,
+                               fill=C_DEALER_PRIMARY, outline=C_DEALER_BORDER, width=2)
+                self.create_text(dx, dy, text="D", font=("Arial", 12, "bold"), fill="black")
+
+            # Enhanced blinds labels (now based on calculated positions)
+            if seat_num == sb_seat:
                 self.create_rectangle(px - 15, py + radius + 12, px + 15, py + radius + 28,
                                     fill=C_BTN_INFO, outline="#1e40af", width=2)
                 self.create_text(px, py + radius + 20, text="SB", font=("Arial", 9, "bold"), fill="white")
-            elif seat == Position.BB.value:
+            elif seat_num == bb_seat:
                 self.create_rectangle(px - 15, py + radius + 12, px + 15, py + radius + 28,
                                     fill="#dc2626", outline="#991b1b", width=2)
                 self.create_text(px, py + radius + 20, text="BB", font=("Arial", 9, "bold"), fill="white")
@@ -249,6 +263,10 @@ class PokerAssistant(tk.Tk):
         self.small_blind = tk.DoubleVar(value=0.5)
         self.big_blind = tk.DoubleVar(value=1.0)
         self.num_players = tk.IntVar(value=6)
+        
+        # New variables for seat positions
+        self.hero_seat = tk.IntVar(value=1)  # Which seat number is the hero
+        self.dealer_seat = tk.StringVar(value="S3")  # Default dealer to S3 (so SB=S4, BB=S5)
 
         # Game state
         self.game_state = GameState()
@@ -318,16 +336,32 @@ class PokerAssistant(tk.Tk):
         self.table_viz = TableVisualization(tf, self)  # Larger canvas
         self.table_viz.pack(pady=10)
         
-        # Enhanced rotate buttons
-        rf = tk.Frame(tf, bg=C_PANEL); rf.pack(pady=(5, 15))
-        StyledButton(rf, text="⟲", color=C_BTN_DARK, hover_color=C_BTN_DARK_HOVER,
-                     command=self.table_viz.rotate_counter_clockwise,
-                     width=4, font=("Arial", 12, "bold")).pack(side="left", padx=5)
-        tk.Label(rf, text="Rotate View", bg=C_PANEL, fg=C_TEXT, 
-                font=("Arial", 10)).pack(side="left", padx=15)
-        StyledButton(rf, text="⟳", color=C_BTN_DARK, hover_color=C_BTN_DARK_HOVER,
-                     command=self.table_viz.rotate_clockwise,
-                     width=4, font=("Arial", 12, "bold")).pack(side="left", padx=5)
+        # Controls frame
+        controls_frame = tk.Frame(tf, bg=C_PANEL)
+        controls_frame.pack(pady=(5, 15))
+        
+        # Hero position controls
+        hero_frame = tk.Frame(controls_frame, bg=C_PANEL)
+        hero_frame.pack(side="left", padx=(0, 20))
+        
+        StyledButton(hero_frame, text="⟲", color=C_BTN_INFO, hover_color=C_BTN_INFO_HOVER,
+                     command=self.table_viz.move_hero_counter_clockwise,
+                     width=3, font=("Arial", 11, "bold")).pack(side="left", padx=2)
+        tk.Label(hero_frame, text="Move YOU", bg=C_PANEL, fg=C_TEXT, 
+                font=("Arial", 10)).pack(side="left", padx=8)
+        StyledButton(hero_frame, text="⟳", color=C_BTN_INFO, hover_color=C_BTN_INFO_HOVER,
+                     command=self.table_viz.move_hero_clockwise,
+                     width=3, font=("Arial", 11, "bold")).pack(side="left", padx=2)
+        
+        # Dealer position dropdown
+        dealer_frame = tk.Frame(controls_frame, bg=C_PANEL)
+        dealer_frame.pack(side="left")
+        tk.Label(dealer_frame, text="Dealer:", bg=C_PANEL, fg=C_TEXT,
+                font=("Arial", 10, "bold")).pack(side="left", padx=(0, 5))
+        self.dealer_menu = ttk.Combobox(dealer_frame, textvariable=self.dealer_seat, width=5,
+                                  values=[f"S{i}" for i in range(1, 10)], font=("Arial", 10))
+        self.dealer_menu.pack(side="left")
+        self.dealer_menu.bind("<<ComboboxSelected>>", lambda e: self.refresh())
 
     def _build_table_area(self, parent):
         """Build the enhanced table configuration area."""
@@ -371,7 +405,7 @@ class PokerAssistant(tk.Tk):
         bb_entry = tk.Entry(blinds_inner, textvariable=self.big_blind, width=5, **self.STYLE_ENTRY)
         bb_entry.pack(side="left", padx=5)
         
-        # Players
+        # Players with callback to update dealer dropdown
         players_frame = tk.Frame(settings, bg=C_BG)
         players_frame.pack(side="left", fill="y")
         tk.Label(players_frame, text="Players", bg=C_BG, fg=C_TEXT,
@@ -380,8 +414,28 @@ class PokerAssistant(tk.Tk):
         players_inner.pack(pady=5)
         players_scale = tk.Scale(players_inner, from_=2, to=9, orient="horizontal",
                                variable=self.num_players, bg=C_BG, fg=C_TEXT,
-                               highlightthickness=0, bd=0, length=120, font=("Arial", 10))
+                               highlightthickness=0, bd=0, length=120, font=("Arial", 10),
+                               command=self._on_players_changed)
         players_scale.pack(side="left")
+        
+    def _on_players_changed(self, value):
+        """Update dealer dropdown when number of players changes."""
+        num = int(value)
+        # Update dealer dropdown values
+        self.dealer_menu['values'] = [f"S{i}" for i in range(1, num + 1)]
+        
+        # Reset to S1 if current value is out of range
+        current_dealer = int(self.dealer_seat.get()[1])
+        if current_dealer > num:
+            self.dealer_seat.set("S1")
+        
+        # Update hero seat if out of range
+        if self.hero_seat.get() > num:
+            self.hero_seat.set(1)
+        
+        # Update players in hand
+        self.players_var.set(",".join(str(i) for i in range(1, num + 1)))
+        self.refresh()
         
     def _build_control_panel(self, parent):
         """Build the enhanced game control panel."""
@@ -645,20 +699,30 @@ class PokerAssistant(tk.Tk):
         self.out_body.insert("end", "• Drag cards to the slots to build your hand\n")
         self.out_body.insert("end", "• Double-click any card to remove it\n")
         self.out_body.insert("end", "• Update game state with current pot and players\n")
-        self.out_body.insert("end", "• The dealer button is the large GOLD button on the table\n")
-        self.out_body.insert("end", "• Rotate the table view to see different perspectives\n\n")
+        self.out_body.insert("end", "• YOU (bright blue) is your position - move with arrow buttons\n")
+        self.out_body.insert("end", "• The dealer button (gold 'D') rotates on the table\n")
+        self.out_body.insert("end", "• SB and BB positions follow the dealer clockwise\n\n")
         self.out_body.insert("end", "🧠 The AI will analyze your equity and recommend optimal play!\n", "positive")
     
     def _update_stats_panel(self):
         """Update the enhanced statistics panel with current game info."""
         self.stats_text.delete("1.0", "end")
         
+        # Calculate blind positions
+        dealer_seat = int(self.dealer_seat.get()[1])
+        num_players = self.num_players.get()
+        sb_seat = (dealer_seat % num_players) + 1
+        bb_seat = (sb_seat % num_players) + 1
+        
         # Enhanced game info
         self.stats_text.insert("end", "🎮 GAME INFO\n", "header")
         self.stats_text.insert("end", f"Position: {self.position.get()}\n", "dim")
         self.stats_text.insert("end", f"Stack: {self.stack_type.get()}\n", "dim")
         self.stats_text.insert("end", f"Blinds: ${self.small_blind.get():.2f}/${self.big_blind.get():.2f}\n", "dim")
-        self.stats_text.insert("end", f"Players: {self.num_players.get()}\n\n", "dim")
+        self.stats_text.insert("end", f"Players: {self.num_players.get()}\n", "dim")
+        self.stats_text.insert("end", f"Hero Seat: S{self.hero_seat.get()}\n", "dim")
+        self.stats_text.insert("end", f"Dealer: {self.dealer_seat.get()}\n", "dim")
+        self.stats_text.insert("end", f"SB: S{sb_seat} | BB: S{bb_seat}\n\n", "dim")
         
         # Enhanced game state
         self.stats_text.insert("end", "🎯 CURRENT STATE\n", "header")
