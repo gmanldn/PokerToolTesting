@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Graphical user interface and in-game flow for Poker-Assistant.
-Enhanced version with proper dealer button positioning and blind rotation.
+Enhanced version with click-to-select cards and auto-refresh functionality.
 """
 from __future__ import annotations
 import tkinter as tk
@@ -11,7 +11,7 @@ from typing import List, Dict, Tuple, Optional
 
 # ──────────────────────────────────────────────────────
 #  Third-Party / Local modules
-# ──────────────────────────────────────────────────────
+# ──────────────────────────────────────────────────
 from poker_modules import (
     Suit, Rank, RANKS_MAP, Card, Position, StackType, PlayerAction,
     HandAnalysis, GameState, get_hand_tier, analyse_hand, to_two_card_str,
@@ -37,6 +37,7 @@ C_HERO_HOVER = "#60a5fa"  # Lighter blue for hover
 C_DEALER_PRIMARY = "#FFD700"  # Gold
 C_DEALER_SECONDARY = "#FFA500"  # Orange
 C_DEALER_BORDER = "#B8860B"  # Dark golden rod
+C_CARD_SELECTED = "#fbbf24"  # Yellow for selected card
 
 # ──────────────────────────────────────────────────────
 #  GUI Widgets
@@ -54,59 +55,77 @@ class StyledButton(tk.Button):
         self.bind("<Enter>", lambda e: self.config(bg=self._hover_bg or self._bg))
         self.bind("<Leave>", lambda e: self.config(bg=self._bg))
 
-class DraggableCard(tk.Label):
+class SelectableCard(tk.Label):
+    """Card that can be clicked to select into next available slot."""
     def __init__(self, master: tk.Widget, card: Card, app):
         super().__init__(master, text=str(card), font=("Arial", 12, "bold"),
                          fg=card.suit.color, bg=C_CARD, width=3, height=2,
-                         bd=1, relief="solid", highlightthickness=0)
+                         bd=2, relief="solid", highlightthickness=0, cursor="hand2")
         self.card, self._app = card, weakref.proxy(app)
-        self._start, self._dragging = (0, 0), False
-        self.bind("<Button-1>", self._click_start)
-        self.bind("<B1-Motion>", self._drag)
-        self.bind("<ButtonRelease-1>", self._release)
+        self._is_used = False
+        self.bind("<Button-1>", self._on_click)
+        self.bind("<Enter>", self._on_enter)
+        self.bind("<Leave>", self._on_leave)
 
-    def _click_start(self, ev): self._start, self._dragging = (ev.x, ev.y), False; self.lift()
-    def _drag(self, ev):
-        if abs(ev.x - self._start[0]) > 3 or abs(ev.y - self._start[1]) > 3: self._dragging = True
-        self.place(x=self.winfo_x() + (ev.x - self._start[0]), y=self.winfo_y() + (ev.y - self._start[1]))
+    def _on_click(self, event):
+        if self._is_used:
+            return
+        self._app.place_card_in_next_slot(self.card)
 
-    def _release(self, ev):
-        target = self.winfo_containing(ev.x_root, ev.y_root)
-        if self._dragging and hasattr(target, "accept"): target.accept(self)
-        else: self.place_forget(); self.pack(side="left", padx=2, pady=2); self._app.place_next_free(self.card)
+    def _on_enter(self, event):
+        if not self._is_used:
+            self.config(bg=C_CARD_SELECTED, relief="raised")
+
+    def _on_leave(self, event):
+        if not self._is_used:
+            self.config(bg=C_CARD, relief="solid")
+
+    def set_used(self, used: bool):
+        self._is_used = used
+        if used:
+            self.config(bg=C_CARD_INACTIVE, fg=C_TEXT_DIM, cursor="arrow")
+        else:
+            self.config(bg=C_CARD, fg=self.card.suit.color, cursor="hand2")
 
 class CardSlot(tk.Frame):
-    def __init__(self, master: tk.Widget, name: str, app):
+    def __init__(self, master: tk.Widget, name: str, app, slot_type: str = "board"):
         super().__init__(master, width=60, height=80, bg="#0d3a26", bd=2, relief="groove",
                          highlightbackground=C_BORDER, highlightthickness=1)
         self.pack_propagate(False)
         self._label = tk.Label(self, text=name, bg="#0d3a26", fg=C_TEXT_DIM, font=("Arial", 9))
         self._label.pack(expand=True)
         self.card, self._app = None, weakref.proxy(app)
-
-    def accept(self, widget: DraggableCard):
-        if self.card: widget.place_forget(); widget.pack(side="left", padx=2, pady=2); return
-        self.set_card(widget.card)
-        widget.place_forget()
-        widget._app.grey_out(widget.card)
-        self._app.refresh()
+        self.slot_type = slot_type  # "hole" or "board"
 
     def set_card(self, card: Card):
+        if self.card:
+            return False  # Slot already occupied
+        
         self.card = card
-        for w in self.winfo_children(): w.destroy()
+        for w in self.winfo_children(): 
+            w.destroy()
+        
         inner = tk.Label(self, text=str(card), font=("Arial", 16, "bold"),
-                         fg=card.suit.color, bg=C_CARD, bd=1, relief="solid")
+                         fg=card.suit.color, bg=C_CARD, bd=1, relief="solid", cursor="hand2")
         inner.pack(expand=True, fill="both", padx=2, pady=2)
-        inner.bind("<Double-Button-1>", lambda *_: self.clear())
+        inner.bind("<Button-1>", lambda *_: self.clear())
+        
+        self._app.grey_out(card)
+        return True
 
     def clear(self):
-        if not self.card: return
+        if not self.card: 
+            return
+        
         self._app.un_grey(self.card)
+        old_card = self.card
         self.card = None
-        for w in self.winfo_children(): w.destroy()
+        
+        for w in self.winfo_children(): 
+            w.destroy()
+        
         self._label = tk.Label(self, text="Empty", bg="#0d3a26", fg=C_TEXT_DIM, font=("Arial", 9))
         self._label.pack(expand=True)
-        self._app.refresh()
 
 # ──────────────────────────────────────────────────────
 #  Enhanced Table Visualization
@@ -139,13 +158,13 @@ class TableVisualization(tk.Canvas):
     # Move hero position ------------------------------------------------------
     def move_hero_clockwise(self):
         self._app.hero_seat.set((self._app.hero_seat.get() % self._app.num_players.get()) + 1)
-        self._draw_table()
+        self._app.schedule_refresh()
 
     def move_hero_counter_clockwise(self):
         current = self._app.hero_seat.get()
         new_seat = current - 1 if current > 1 else self._app.num_players.get()
         self._app.hero_seat.set(new_seat)
-        self._draw_table()
+        self._app.schedule_refresh()
 
     # Enhanced drawing method -------------------------------------------------
     def _draw_table(self):
@@ -251,7 +270,7 @@ class PokerAssistant(tk.Tk):
 
     def __init__(self):
         super().__init__()
-        self.title("Poker Assistant v13 - Pro Edition")
+        self.title("Poker Assistant v14 - Pro Edition")
         self.geometry("1450x920")
         self.minsize(1200, 800)
         self.configure(bg=C_BG)
@@ -272,13 +291,20 @@ class PokerAssistant(tk.Tk):
         self.game_state = GameState()
 
         # UI state
-        self.grid_cards: Dict[str, DraggableCard] = {}
+        self.grid_cards: Dict[str, SelectableCard] = {}
         self.used_cards: set[str] = set()
         self._last_decision_id: Optional[int] = None
-        self._refresh_scheduled = False
+        self._refresh_scheduled = False  # Prevent multiple refreshes
+        self._refresh_after_id = None
 
         self._build_gui()
-        self.after(100, self.refresh)
+        self.schedule_refresh()
+
+    def schedule_refresh(self):
+        """Schedule a refresh with debouncing to prevent multiple rapid refreshes."""
+        if self._refresh_after_id:
+            self.after_cancel(self._refresh_after_id)
+        self._refresh_after_id = self.after(50, self.refresh)
 
     # -----------------------------------------------------------------------
     #  Enhanced GUI construction
@@ -306,7 +332,7 @@ class PokerAssistant(tk.Tk):
         header.pack(fill="x", pady=(10, 5), padx=10)
         tk.Label(header, text="🃏 CARD DECK", font=("Arial", 12, "bold"),
                  bg=C_PANEL, fg=C_TEXT).pack(side="left")
-        tk.Label(header, text="Drag cards to table →", font=("Arial", 9),
+        tk.Label(header, text="Click cards to select →", font=("Arial", 9),
                  bg=C_PANEL, fg=C_TEXT_DIM).pack(side="right")
         
         card_container = tk.Frame(parent, bg=C_PANEL)
@@ -323,7 +349,7 @@ class PokerAssistant(tk.Tk):
             r1.pack(); r2.pack(pady=(3, 0))
             for i, r_val in enumerate(RANK_ORDER):
                 card = Card(r_val, suit)
-                w = DraggableCard(r1 if i < 7 else r2, card, self)
+                w = SelectableCard(r1 if i < 7 else r2, card, self)
                 w.pack(side="left", padx=2)
                 self.grid_cards[str(card)] = w
 
@@ -361,7 +387,7 @@ class PokerAssistant(tk.Tk):
         self.dealer_menu = ttk.Combobox(dealer_frame, textvariable=self.dealer_seat, width=5,
                                   values=[f"S{i}" for i in range(1, 10)], font=("Arial", 10))
         self.dealer_menu.pack(side="left")
-        self.dealer_menu.bind("<<ComboboxSelected>>", lambda e: self.refresh())
+        self.dealer_menu.bind("<<ComboboxSelected>>", lambda e: self.schedule_refresh())
 
     def _build_table_area(self, parent):
         """Build the enhanced table configuration area."""
@@ -381,6 +407,7 @@ class PokerAssistant(tk.Tk):
         pos_menu = ttk.Combobox(pos_frame, textvariable=self.position, width=8,
                                values=[p.name for p in Position], font=("Arial", 10))
         pos_menu.pack(pady=5)
+        pos_menu.bind("<<ComboboxSelected>>", lambda e: self.schedule_refresh())
         
         # Stack size
         stack_frame = tk.Frame(settings, bg=C_BG)
@@ -390,6 +417,7 @@ class PokerAssistant(tk.Tk):
         stack_menu = ttk.Combobox(stack_frame, textvariable=self.stack_type, width=15,
                                  values=[s.value for s in StackType], font=("Arial", 10))
         stack_menu.pack(pady=5)
+        stack_menu.bind("<<ComboboxSelected>>", lambda e: self.schedule_refresh())
         
         # Blinds
         blinds_frame = tk.Frame(settings, bg=C_BG)
@@ -401,9 +429,11 @@ class PokerAssistant(tk.Tk):
         tk.Label(blinds_inner, text="SB:", bg=C_BG, fg=C_TEXT, font=("Arial", 10, "bold")).pack(side="left")
         sb_entry = tk.Entry(blinds_inner, textvariable=self.small_blind, width=5, **self.STYLE_ENTRY)
         sb_entry.pack(side="left", padx=(5, 10))
+        sb_entry.bind("<KeyRelease>", lambda e: self.schedule_refresh())
         tk.Label(blinds_inner, text="BB:", bg=C_BG, fg=C_TEXT, font=("Arial", 10, "bold")).pack(side="left")
         bb_entry = tk.Entry(blinds_inner, textvariable=self.big_blind, width=5, **self.STYLE_ENTRY)
         bb_entry.pack(side="left", padx=5)
+        bb_entry.bind("<KeyRelease>", lambda e: self.schedule_refresh())
         
         # Players with callback to update dealer dropdown
         players_frame = tk.Frame(settings, bg=C_BG)
@@ -435,7 +465,7 @@ class PokerAssistant(tk.Tk):
         
         # Update players in hand
         self.players_var.set(",".join(str(i) for i in range(1, num + 1)))
-        self.refresh()
+        self.schedule_refresh()
         
     def _build_control_panel(self, parent):
         """Build the enhanced game control panel."""
@@ -454,7 +484,8 @@ class PokerAssistant(tk.Tk):
                 font=self.FONT_SUBHEADER).pack(anchor="w")
         hole_slots = tk.Frame(hole_frame, bg=C_BG)
         hole_slots.pack(pady=8)
-        self.hole = [CardSlot(hole_slots, "Card 1", self), CardSlot(hole_slots, "Card 2", self)]
+        self.hole = [CardSlot(hole_slots, "Card 1", self, "hole"), 
+                     CardSlot(hole_slots, "Card 2", self, "hole")]
         for slot in self.hole:
             slot.pack(side="left", padx=5)
         
@@ -465,7 +496,7 @@ class PokerAssistant(tk.Tk):
                 font=self.FONT_SUBHEADER).pack(anchor="w")
         board_slots = tk.Frame(board_frame, bg=C_BG)
         board_slots.pack(pady=8)
-        self.board = [CardSlot(board_slots, f"Card {i+1}", self) for i in range(5)]
+        self.board = [CardSlot(board_slots, f"Card {i+1}", self, "board") for i in range(5)]
         for slot in self.board:
             slot.pack(side="left", padx=3)
             
@@ -484,6 +515,7 @@ class PokerAssistant(tk.Tk):
         self.pot_entry = tk.Entry(pot_inner, width=10, **self.STYLE_ENTRY)
         self.pot_entry.insert(0, str(self.small_blind.get() + self.big_blind.get()))
         self.pot_entry.pack(side="left", padx=5)
+        self.pot_entry.bind("<KeyRelease>", lambda e: self._update_game_state())
         
         call_frame = tk.Frame(state_frame, bg=C_BG)
         call_frame.pack(side="left", padx=(0, 25))
@@ -495,6 +527,7 @@ class PokerAssistant(tk.Tk):
         self.call_entry = tk.Entry(call_inner, width=10, **self.STYLE_ENTRY)
         self.call_entry.insert(0, str(self.big_blind.get()))
         self.call_entry.pack(side="left", padx=5)
+        self.call_entry.bind("<KeyRelease>", lambda e: self._update_game_state())
         
         # Players in hand
         players_frame = tk.Frame(state_frame, bg=C_BG)
@@ -504,12 +537,7 @@ class PokerAssistant(tk.Tk):
         self.players_var = tk.StringVar(value="1,2,3,4,5,6")
         players_entry = tk.Entry(players_frame, textvariable=self.players_var, width=18, **self.STYLE_ENTRY)
         players_entry.pack(pady=5)
-        
-        # Enhanced update button
-        update_btn = StyledButton(state_frame, text="🔄 Update Game State", color=C_BTN_INFO,
-                                 hover_color=C_BTN_INFO_HOVER, command=self._update_game_state,
-                                 font=("Arial", 10, "bold"))
-        update_btn.pack(side="left", padx=(25, 0), pady=5)
+        players_entry.bind("<KeyRelease>", lambda e: self._update_game_state())
         
     def _build_action_panel(self, parent):
         """Build the enhanced action panel with decision buttons."""
@@ -522,34 +550,28 @@ class PokerAssistant(tk.Tk):
         decision_frame.pack(fill="x", padx=15, pady=(15, 10))
         tk.Label(decision_frame, text="🧠 Recommended Action:", bg=C_BG, fg=C_TEXT,
                 font=self.FONT_SUBHEADER).pack(side="left")
-        self.decision_label = tk.Label(decision_frame, text="→ (Analyze hand first)", bg=C_BG, fg=C_TEXT_DIM,
+        self.decision_label = tk.Label(decision_frame, text="→ Waiting for cards...", bg=C_BG, fg=C_TEXT_DIM,
                                      font=("Arial", 14, "bold"))
         self.decision_label.pack(side="left", padx=15)
         
-        # Enhanced action buttons
+        # Enhanced action buttons (no more analyze button)
         btn_frame = tk.Frame(af, bg=C_BG)
         btn_frame.pack(fill="x", padx=15, pady=(0, 15))
-        
-        # Analyze button (prominent)
-        analyze_btn = StyledButton(btn_frame, text="🔍 Analyze Hand", color=C_BTN_PRIMARY,
-                                  hover_color=C_BTN_PRIMARY_HOVER, command=self.refresh,
-                                  font=("Arial", 11, "bold"), padx=20, pady=8)
-        analyze_btn.pack(side="left", padx=(0, 15))
         
         # Action buttons
         fold_btn = StyledButton(btn_frame, text="❌ Fold", color=C_BTN_DANGER,
                                hover_color=C_BTN_DANGER_HOVER, command=lambda: self._record_action("FOLD"),
-                               font=("Arial", 10, "bold"))
+                               font=("Arial", 10, "bold"), padx=20, pady=8)
         fold_btn.pack(side="left", padx=(0, 10))
         
         call_btn = StyledButton(btn_frame, text="✅ Call", color=C_BTN_SUCCESS,
                                hover_color=C_BTN_SUCCESS_HOVER, command=lambda: self._record_action("CALL"),
-                               font=("Arial", 10, "bold"))
+                               font=("Arial", 10, "bold"), padx=20, pady=8)
         call_btn.pack(side="left", padx=(0, 10))
         
         raise_btn = StyledButton(btn_frame, text="⬆️ Raise", color=C_BTN_WARNING,
                                 hover_color=C_BTN_WARNING_HOVER, command=lambda: self._record_action("RAISE"),
-                                font=("Arial", 10, "bold"))
+                                font=("Arial", 10, "bold"), padx=20, pady=8)
         raise_btn.pack(side="left")
         
         # Reset button (right-aligned)
@@ -594,12 +616,30 @@ class PokerAssistant(tk.Tk):
             widget.tag_configure("negative", foreground="#ef4444", font=("Consolas", 10, "bold"))
             widget.tag_configure("warning", foreground="#f59e0b", font=("Consolas", 10, "bold"))
             
+    # Click-to-select functionality
+    def place_card_in_next_slot(self, card: Card):
+        """Place a card in the next available slot (hole first, then board)."""
+        # Try hole cards first
+        for slot in self.hole:
+            if slot.set_card(card):
+                self.schedule_refresh()
+                return
+        
+        # Then try board cards
+        for slot in self.board:
+            if slot.set_card(card):
+                self.schedule_refresh()
+                return
+        
+        # No free slots
+        messagebox.showinfo("No Free Slots", "All card slots are full. Remove a card first.")
+            
     # Helper methods for the action panel
     def _update_game_state(self):
         """Update the game state based on UI inputs."""
         try:
-            pot = float(self.pot_entry.get())
-            to_call = float(self.call_entry.get())
+            pot = float(self.pot_entry.get() or 0)
+            to_call = float(self.call_entry.get() or 0)
             players_str = self.players_var.get().strip()
             players_in_hand = [int(p.strip()) for p in re.split(r'[,\s]+', players_str) if p.strip()]
             
@@ -608,18 +648,18 @@ class PokerAssistant(tk.Tk):
             self.game_state.to_call = to_call
             self.game_state.players_in_hand = players_in_hand
             
-            self.refresh()
-        except ValueError as e:
-            messagebox.showerror("Input Error", f"Invalid input: {e}")
+            self.schedule_refresh()
+        except ValueError:
+            pass  # Silent fail for invalid input during typing
             
     def _record_action(self, action):
         """Record a player action."""
         if not self._last_decision_id:
-            messagebox.showinfo("Info", "Please analyze your hand first.")
+            messagebox.showinfo("Info", "Please add cards to analyze first.")
             return
             
         messagebox.showinfo("Action Recorded", f"You chose to {action}")
-        self.refresh()
+        self.schedule_refresh()
         
     def _reset_table(self):
         """Reset the table state."""
@@ -635,13 +675,17 @@ class PokerAssistant(tk.Tk):
         
         self._clear_output_panels()
         self._display_welcome_message()
-        self.decision_label.config(text="→ (Analyze hand first)", fg=C_TEXT_DIM)
-        self.refresh()
+        self.decision_label.config(text="→ Waiting for cards...", fg=C_TEXT_DIM)
+        self._last_decision_id = None
+        self.schedule_refresh()
 
     # ────────────────────────────────────────────────────────────────────
     #  Enhanced refresh logic
     # ────────────────────────────────────────────────────────────────────
     def refresh(self):
+        """Main refresh method that updates everything."""
+        self._refresh_after_id = None
+        
         hole = [s.card for s in self.hole if s.card]
         board = [s.card for s in self.board if s.card]
 
@@ -656,6 +700,7 @@ class PokerAssistant(tk.Tk):
             analysis = self._update_analysis_panel(hole, board)
         else:
             self._display_welcome_message()
+            self._last_decision_id = None
 
         self._update_stats_panel()
 
@@ -666,22 +711,18 @@ class PokerAssistant(tk.Tk):
         self.table_viz.update_info(pot, to_call, stage, equity)
 
     # Helper methods for card management
-    def place_next_free(self, card):
-        """Place a card in the next free slot if it was dragged to an invalid location."""
-        pass
-    
     def grey_out(self, card):
         """Grey out a card in the deck grid to show it's in use."""
         card_str = str(card)
         if card_str in self.grid_cards:
-            self.grid_cards[card_str].config(bg=C_CARD_INACTIVE, fg=C_TEXT_DIM)
+            self.grid_cards[card_str].set_used(True)
             self.used_cards.add(card_str)
     
     def un_grey(self, card):
         """Un-grey a card in the deck grid when it's removed from a slot."""
         card_str = str(card)
         if card_str in self.grid_cards:
-            self.grid_cards[card_str].config(bg=C_CARD, fg=card.suit.color)
+            self.grid_cards[card_str].set_used(False)
             if card_str in self.used_cards:
                 self.used_cards.remove(card_str)
     
@@ -694,15 +735,15 @@ class PokerAssistant(tk.Tk):
     def _display_welcome_message(self):
         """Display an enhanced welcome message in the output panel."""
         self.out_body.insert("end", "🎉 Welcome to Poker Assistant Pro!\n\n", "header")
-        self.out_body.insert("end", "Drag cards from the deck to your hand and the board, then click 'Analyze Hand' to get professional advice.\n\n", "dim")
+        self.out_body.insert("end", "Click cards from the deck to add them to your hand and the board.\n\n", "dim")
         self.out_body.insert("end", "🎯 QUICK START TIPS:\n", "subheader")
-        self.out_body.insert("end", "• Drag cards to the slots to build your hand\n")
-        self.out_body.insert("end", "• Double-click any card to remove it\n")
-        self.out_body.insert("end", "• Update game state with current pot and players\n")
+        self.out_body.insert("end", "• Click cards to place them in the next available slot\n")
+        self.out_body.insert("end", "• Click any placed card to remove it\n")
+        self.out_body.insert("end", "• Everything updates automatically as you make changes\n")
         self.out_body.insert("end", "• YOU (bright blue) is your position - move with arrow buttons\n")
         self.out_body.insert("end", "• The dealer button (gold 'D') rotates on the table\n")
         self.out_body.insert("end", "• SB and BB positions follow the dealer clockwise\n\n")
-        self.out_body.insert("end", "🧠 The AI will analyze your equity and recommend optimal play!\n", "positive")
+        self.out_body.insert("end", "🧠 The AI analyzes your hand in real-time!\n", "positive")
     
     def _update_stats_panel(self):
         """Update the enhanced statistics panel with current game info."""
