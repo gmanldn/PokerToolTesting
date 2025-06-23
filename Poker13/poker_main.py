@@ -18,7 +18,6 @@ initialise_db_if_needed()
 # Import the GUI after the DB is ready
 from poker_gui import PokerAssistant
 
-
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)
     app = PokerAssistant()
