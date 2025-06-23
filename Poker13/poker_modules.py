@@ -3,7 +3,7 @@ All reusable / testable poker logic lives here.
 Nothing in this file knows anything about tkinter or the database.
 """
 from __future__ import annotations
-from enum import Enum
+from enum import Enum, IntEnum  # Added IntEnum import
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Set, Dict
 from collections import Counter
@@ -98,7 +98,7 @@ class HandAnalysis:
 # ──────────────────────────────────────────────────────
 #  Hand Evaluation Logic
 # ──────────────────────────────────────────────────────
-class HandRank(Enum):
+class HandRank(IntEnum):  # Changed from Enum to IntEnum
     HIGH_CARD, PAIR, TWO_PAIR, THREE_OF_A_KIND, STRAIGHT, FLUSH, FULL_HOUSE, FOUR_OF_A_KIND, STRAIGHT_FLUSH = range(9)
 
 def get_hand_rank(hole: List[Card], board: List[Card]) -> Tuple[HandRank, List[int]]:
