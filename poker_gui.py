@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Fixed Poker GUI - Graphical interface for the Poker Assistant
-Fixes GameState initialization issue
+Fixes GameState initialization and database connection issues
 """
 
 import tkinter as tk
@@ -50,7 +50,9 @@ class PokerAssistant:
     def init_database(self):
         """Initialize the database connection."""
         try:
-            self.conn, self.cursor = open_db()
+            # open_db() returns just a connection, not a tuple
+            self.conn = open_db()
+            self.cursor = self.conn.cursor()
             initialise_db_if_needed(self.cursor)
             self.conn.commit()
         except Exception as e:
